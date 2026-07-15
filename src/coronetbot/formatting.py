@@ -8,7 +8,10 @@ DISCORD_LIMIT = 2000
 
 
 def quote(text: str) -> str:
-    return "\n".join(f"> {line}" if line else ">" for line in text.split("\n"))
+    # Discord renders a bare `>` on an otherwise-empty line as a visible greater-than
+    # sign rather than as an empty quoted line. A zero-width space keeps the blockquote
+    # shape without adding visible junk between quoted paragraphs.
+    return "\n".join(f"> {line}" if line else "> \u200b" for line in text.split("\n"))
 
 
 def reasons(result: ModerationResult) -> str:

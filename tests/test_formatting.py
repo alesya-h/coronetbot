@@ -3,7 +3,7 @@ from coronetbot.models import ModerationResult, Violation
 
 
 def test_quote_preserves_text() -> None:
-    assert quote("one\n\nthree") == "> one\n>\n> three"
+    assert quote("one\n\nthree") == "> one\n> \u200b\n> three"
 
 
 def test_chunks_preserve_text_except_split_newlines() -> None:
