@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import discord
@@ -11,6 +13,7 @@ from .config import Config
 from .formatting import chunks, quote, reasons, removal_notice, validation_notice
 from .models import ModerationResult
 from .moderator import ModerationServiceError, Moderator
+from .state import StateStore
 
 LOG = logging.getLogger(__name__)
 AUDIT_CHANNEL_NAME = "bot-spam"
@@ -25,6 +28,8 @@ class CoronetClient(discord.Client):
         self.rules = rules
         self.tree = app_commands.CommandTree(self)
         self.audit_channel: discord.TextChannel | None = None
+        self.state = StateStore.load(config.state_path)
+        self._ready_once = False
         self.moderator = Moderator(
             model=config.llm_model,
             thinking=config.llm_thinking,
@@ -90,30 +95,31 @@ class CoronetClient(discord.Client):
             self.config.llm_model,
             self.config.llm_thinking,
         )
+        if not self._ready_once:
+            self._ready_once = True
+            await self._backfill_missed_messages(guild)
 
     async def on_message(self, message: discord.Message) -> None:
-        # Only the mode-selected server is in scope. Ignore automation and the audit
-        # channel itself to prevent bot-on-bot and audit recursion.
-        if (
-            message.guild is None
-            or message.guild.id != self.config.guild_id
-            or message.author.bot
-            or message.webhook_id is not None
-            or (self.audit_channel is not None and message.channel.id == self.audit_channel.id)
-        ):
+        await self._process_message(message, source="live")
+
+    async def _process_message(self, message: discord.Message, *, source: str) -> None:
+        if not self._message_in_scope(message):
+            return
+        if await self.state.seen(message.channel.id, message.id):
             return
 
-        if not await self._audit(self._received_audit(message)):
+        if not await self._audit(self._received_audit(message, source=source)):
             LOG.error("Audit unavailable; message left intact (message=%s)", message.id)
             return
 
         if not message.content.strip():
-            await self._audit(
+            if await self._audit(
                 self._judgement_audit(
                     message,
                     "ALLOWED — no textual content; attachments were logged but not analysed.",
                 )
-            )
+            ):
+                await self.state.mark_processed(message.channel.id, message.id)
             return
 
         try:
@@ -125,13 +131,15 @@ class CoronetClient(discord.Client):
                 message.channel.id,
                 message.id,
             )
-            await self._audit(
+            if await self._audit(
                 self._judgement_audit(message, "ERROR — classifier unavailable; failed open.")
-            )
+            ):
+                await self.state.mark_processed(message.channel.id, message.id)
             return
 
         if result.allowed:
-            await self._audit(self._judgement_audit(message, "ALLOWED — no rules violated."))
+            if await self._audit(self._judgement_audit(message, "ALLOWED — no rules violated.")):
+                await self.state.mark_processed(message.channel.id, message.id)
             return
 
         channel_name = getattr(message.channel, "name", "unknown")
@@ -178,10 +186,74 @@ class CoronetClient(discord.Client):
                 message.id,
             )
 
-        await self._audit(
+        if await self._audit(
             f"**Moderation actions** — message `{message.id}`\n"
             f"DM delivery: **{dm_status}**\nDeletion: **{delete_status}**"
+        ):
+            await self.state.mark_processed(message.channel.id, message.id)
+
+    def _message_in_scope(self, message: discord.Message) -> bool:
+        return not (
+            message.guild is None
+            or message.guild.id != self.config.guild_id
+            or message.author.bot
+            or message.webhook_id is not None
+            or (self.audit_channel is not None and message.channel.id == self.audit_channel.id)
         )
+
+    async def _backfill_missed_messages(self, guild: discord.Guild) -> None:
+        processed = 0
+        scanned_channels = 0
+        cutoff = datetime.now(UTC) - timedelta(seconds=self.config.backfill_lookback_seconds)
+        await self._audit(
+            "**Backfill started**\n"
+            f"State file: `{self.config.state_path}`\n"
+            f"Initial no-cursor lookback: `{self.config.backfill_lookback_seconds}` seconds"
+        )
+
+        async for channel in self._history_channels(guild):
+            scanned_channels += 1
+            cursor = await self.state.cursor(channel.id)
+            after = discord.Object(id=cursor) if cursor is not None else cutoff
+            try:
+                async for message in channel.history(
+                    limit=None,
+                    after=after,
+                    oldest_first=True,
+                ):
+                    if not self._message_in_scope(message):
+                        continue
+                    await self._process_message(message, source="backfill")
+                    processed += 1
+            except discord.Forbidden:
+                LOG.warning("Cannot read history for channel %s", channel.id)
+            except discord.HTTPException:
+                LOG.exception("Failed reading history for channel %s", channel.id)
+
+        await self._audit(
+            "**Backfill finished**\n"
+            f"Channels scanned: `{scanned_channels}`\n"
+            f"Candidate messages processed/skipped: `{processed}`"
+        )
+
+    async def _history_channels(
+        self, guild: discord.Guild
+    ) -> AsyncIterator[discord.abc.Messageable]:
+        for channel in guild.text_channels:
+            if self.audit_channel is not None and channel.id == self.audit_channel.id:
+                continue
+            permissions = channel.permissions_for(guild.me)
+            if permissions.view_channel and permissions.read_message_history:
+                yield channel
+
+        # Active public/private threads are enough for normal restart gaps. Older archived
+        # threads require channel-specific archive scans and can be added if needed.
+        for thread in guild.threads:
+            if self.audit_channel is not None and thread.id == self.audit_channel.id:
+                continue
+            permissions = thread.permissions_for(guild.me)
+            if permissions.view_channel and permissions.read_message_history:
+                yield thread
 
     async def _audit(self, text: str) -> bool:
         channel = self.audit_channel
@@ -196,7 +268,7 @@ class CoronetClient(discord.Client):
             LOG.exception("Could not write to audit channel %s", channel.id)
             return False
 
-    def _received_audit(self, message: discord.Message) -> str:
+    def _received_audit(self, message: discord.Message, *, source: str) -> str:
         channel_name = getattr(message.channel, "name", "unknown")
         body = message.content if message.content else "_(no text content)_"
         attachment_lines = [
@@ -206,7 +278,7 @@ class CoronetClient(discord.Client):
         ]
         attachments = "\n".join(attachment_lines) if attachment_lines else "None"
         return (
-            "**Message received**\n"
+            f"**Message received** ({source})\n"
             f"Message: `{message.id}` · [jump]({message.jump_url})\n"
             f"Author: `{message.author}` (`{message.author.id}`)\n"
             f"Channel: `#{channel_name}` (`{message.channel.id}`)\n\n"

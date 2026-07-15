@@ -18,6 +18,8 @@ def test_dev_config_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert config.guild_name == "Alesya's test server"
     assert config.llm_model == "gpt-5.6-sol"
     assert config.llm_thinking == "high"
+    assert config.state_path == Path(".coronetbot-state.json")
+    assert config.backfill_lookback_seconds == 3600
 
 
 def test_production_server_and_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -28,11 +30,15 @@ def test_production_server_and_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setenv("CB_RULES_PATH", str(rules))
     monkeypatch.setenv("CB_MODE", "production")
     monkeypatch.setenv("CB_CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("CB_STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setenv("CB_BACKFILL_LOOKBACK_SECONDS", "0")
     monkeypatch.setenv("CODEX_HOME", "previous-test-value")
     config = Config.from_env()
     assert config.guild_id == 1439793454153601066
     assert config.guild_name == "Coronet"
     assert os.environ["CODEX_HOME"] == str(codex_home)
+    assert config.state_path == tmp_path / "state.json"
+    assert config.backfill_lookback_seconds == 0
 
 
 def test_discord_token_is_required(monkeypatch: pytest.MonkeyPatch) -> None:

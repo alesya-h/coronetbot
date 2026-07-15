@@ -39,6 +39,8 @@ class Config:
     max_concurrency: int
     llm_timeout_seconds: int
     llm_retries: int
+    state_path: Path
+    backfill_lookback_seconds: int
 
     @classmethod
     def from_env(cls) -> Config:
@@ -70,6 +72,8 @@ class Config:
             # configuration consistently CB_-prefixed and bridge it here.
             os.environ["CODEX_HOME"] = codex_home
 
+        state_path = Path(os.environ.get("CB_STATE_PATH", ".coronetbot-state.json"))
+
         return cls(
             discord_token=discord_token,
             mode=mode,
@@ -81,4 +85,6 @@ class Config:
             max_concurrency=_integer("CB_MAX_CONCURRENCY", 2),
             llm_timeout_seconds=_integer("CB_LLM_TIMEOUT_SECONDS", 120),
             llm_retries=_integer("CB_LLM_RETRIES", 2, minimum=0),
+            state_path=state_path,
+            backfill_lookback_seconds=_integer("CB_BACKFILL_LOOKBACK_SECONDS", 3600, 0),
         )

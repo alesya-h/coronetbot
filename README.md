@@ -95,11 +95,19 @@ Codex CLI, Node.js, or per-message subprocess in the runtime.
 | `CB_MAX_CONCURRENCY` | no | `2` |
 | `CB_LLM_TIMEOUT_SECONDS` | no | `120` |
 | `CB_LLM_RETRIES` | no | `2` |
+| `CB_STATE_PATH` | no | `.coronetbot-state.json` |
+| `CB_BACKFILL_LOOKBACK_SECONDS` | no | `3600` |
 | `CB_CODEX_HOME` | no | `~/.codex` |
 
 Calls are bounded by a concurrency semaphore. Authentication/refresh operations are
 serialized, while API requests use independent clients and may run concurrently. Keep
 concurrency conservative because ChatGPT subscription limits differ from API limits.
+
+The bot stores the highest processed message ID per channel in `CB_STATE_PATH`. On startup
+it fetches and processes visible messages newer than that cursor. For channels with no
+cursor yet, it processes visible recent history up to `CB_BACKFILL_LOOKBACK_SECONDS` old;
+set this to `0` before a first production launch if you want to start from a clean
+baseline instead of moderating recent pre-existing messages.
 
 `codex-backend-sdk` is an unofficial community library over undocumented ChatGPT
 endpoints. It is pinned exactly; backend changes may require an SDK upgrade.
@@ -121,10 +129,11 @@ docker compose logs -f bot
 ```
 
 The Python-only container runs as an unprivileged user, mounts `RULES.md` read-only, and
-stores OAuth credentials in the `codex_auth` Docker volume so SDK token refreshes survive
-container replacement. Treat both the source credential file and that volume as secrets;
-never put either in logs, source control, images, or chat. Restart the service after
-changing rules or environment variables.
+stores OAuth credentials in the `codex_auth` Docker volume and per-channel cursors in the
+`bot_state` volume, so SDK token refreshes and missed-message backfill survive container
+replacement. Treat both the source credential file and the auth volume as secrets; never
+put either in logs, source control, images, or chat. Restart the service after changing
+rules or environment variables.
 
 ## Audit retention and operational behaviour
 
@@ -136,7 +145,9 @@ changing rules or environment variables.
 - The bot never moderates `#bot-spam` itself, bot messages, or webhooks; this prevents
   recursive audit loops.
 - If the initial audit record or a blocked judgement cannot be written, moderation fails
-  open and the source message is not deleted.
+  open and the source message is not deleted. Successfully processed messages advance a
+  per-channel cursor so restarts can backfill visible messages that arrived while the bot
+  was offline.
 - Message text and active rules are also sent through the ChatGPT Codex subscription
   provider. Confirm its current retention/privacy policy before production use.
 - Discord and the LLM provider may independently retain data; deleting a public Discord

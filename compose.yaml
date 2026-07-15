@@ -6,6 +6,8 @@ services:
     volumes:
       - ./RULES.md:/app/RULES.md:ro
       - codex_auth:/var/lib/coronetbot/codex
+      - bot_state:/var/lib/coronetbot/state
 
 volumes:
   codex_auth:
+  bot_state:

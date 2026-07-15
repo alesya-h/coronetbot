@@ -1,5 +1,6 @@
 .env
 .env.old
+.coronetbot-state.json*
 /auth.json
 .venv/
 __pycache__/
