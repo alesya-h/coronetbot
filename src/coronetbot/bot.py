@@ -9,8 +9,8 @@ from discord import app_commands
 from . import __version__
 from .config import Config
 from .formatting import chunks, quote, reasons, removal_notice, validation_notice
-from .moderator import ModerationServiceError, Moderator
 from .models import ModerationResult
+from .moderator import ModerationServiceError, Moderator
 
 LOG = logging.getLogger(__name__)
 AUDIT_CHANNEL_NAME = "bot-spam"
@@ -73,7 +73,10 @@ class CoronetClient(discord.Client):
         member = guild.me
         permissions = self.audit_channel.permissions_for(member) if member else None
         if permissions is None or not permissions.view_channel or not permissions.send_messages:
-            LOG.critical("Bot cannot view and send messages in audit channel %s", self.audit_channel.id)
+            LOG.critical(
+                "Bot cannot view and send messages in audit channel %s",
+                self.audit_channel.id,
+            )
             await self.close()
             return
 
@@ -135,7 +138,10 @@ class CoronetClient(discord.Client):
         notice = removal_notice(channel_name, message.content, result)
         decision_audit = self._blocked_audit(message, result, notice)
         if not await self._audit(decision_audit):
-            LOG.error("Could not audit blocked decision; message left intact (message=%s)", message.id)
+            LOG.error(
+                "Could not audit blocked decision; message left intact (message=%s)",
+                message.id,
+            )
             return
 
         dm_status = "sent"
@@ -210,12 +216,12 @@ class CoronetClient(discord.Client):
 
     @staticmethod
     def _judgement_audit(message: discord.Message, judgement: str) -> str:
-        return f"**Moderation judgement** — message `{message.id}`\n{judgement}\nBot response: None."
+        return (
+            f"**Moderation judgement** — message `{message.id}`\n{judgement}\nBot response: None."
+        )
 
     @staticmethod
-    def _blocked_audit(
-        message: discord.Message, result: ModerationResult, notice: str
-    ) -> str:
+    def _blocked_audit(message: discord.Message, result: ModerationResult, notice: str) -> str:
         return (
             f"**Moderation judgement** — message `{message.id}`\n"
             f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
@@ -261,7 +267,10 @@ class CoronetClient(discord.Client):
                 f"**Bot response**\n{quote(output)}"
             )
             if not await self._audit(response_audit):
-                output = "⚠️ Validation completed, but the response could not be audited. Try again later."
+                output = (
+                    "⚠️ Validation completed, but the response could not be audited. "
+                    "Try again later."
+                )
             await _send_followups(interaction, output)
 
         @self.tree.command(name="rules", description="Show the current moderation rules")

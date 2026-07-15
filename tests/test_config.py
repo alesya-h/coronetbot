@@ -20,9 +20,7 @@ def test_dev_config_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert config.llm_thinking == "high"
 
 
-def test_production_server_and_codex_home(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_production_server_and_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     rules = tmp_path / "rules.md"
     rules.write_text("Be civil")
     codex_home = tmp_path / "codex"

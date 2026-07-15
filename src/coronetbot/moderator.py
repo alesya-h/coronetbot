@@ -70,9 +70,9 @@ class Moderator:
         self.model = model
         self.thinking = thinking
         self.system_prompt = SYSTEM_PROMPT.replace("{rules}", rules.strip())
-        self.prompt_cache_key = "coronetbot-" + hashlib.sha256(
-            self.system_prompt.encode()
-        ).hexdigest()[:16]
+        self.prompt_cache_key = (
+            "coronetbot-" + hashlib.sha256(self.system_prompt.encode()).hexdigest()[:16]
+        )
         self.timeout_seconds = timeout_seconds
         self.retries = retries
         self.semaphore = asyncio.Semaphore(max_concurrency)

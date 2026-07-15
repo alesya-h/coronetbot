@@ -1,5 +1,6 @@
 .jj
 .env
+.env.old
 auth.json
 .venv
 __pycache__

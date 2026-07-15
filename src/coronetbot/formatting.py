@@ -14,9 +14,7 @@ def quote(text: str) -> str:
 def reasons(result: ModerationResult) -> str:
     entries = []
     for violation in result.violations:
-        entries.append(
-            f"• **{violation.rule}:** “{violation.quote}”\n  {violation.explanation}"
-        )
+        entries.append(f"• **{violation.rule}:** “{violation.quote}”\n  {violation.explanation}")
     return "\n\n".join(entries)
 
 

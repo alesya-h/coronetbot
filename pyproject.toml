@@ -5,6 +5,7 @@ description = "LLM-based Discord moderation bot"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "certifi>=2026.6.17",
   "codex-backend-sdk==0.3.6",
   "discord.py>=2.5,<3",
   "pydantic>=2,<3",

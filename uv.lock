@@ -330,6 +330,7 @@ name = "coronetbot"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "certifi" },
     { name = "codex-backend-sdk" },
     { name = "discord-py" },
     { name = "pydantic" },
@@ -344,6 +345,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "certifi", specifier = ">=2026.6.17" },
     { name = "codex-backend-sdk", specifier = "==0.3.6" },
     { name = "discord-py", specifier = ">=2.5,<3" },
     { name = "pydantic", specifier = ">=2,<3" },
