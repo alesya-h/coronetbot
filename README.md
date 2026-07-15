@@ -18,9 +18,9 @@ commands can also be used in a DM with the bot.
 
 ## Moderation rules
 
-Rules are loaded from [`RULES.md`](RULES.md) at startup. The included rules are
-**provisional defaults inferred from the original specification**; replace them with the
-server's canonical rules before deploying.
+Rules are loaded from [`RULES.md`](RULES.md) at startup. The included rules are the
+inferred initial policy and are intended to be refined incrementally as moderation cases
+provide evidence.
 
 The model must return a structured decision. CoronetBot validates that every cited quote
 is an exact substring of the original message and that blocked decisions include both a
@@ -32,8 +32,10 @@ Requirements: Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv sync
+uv run coronetbot-auth     # Browser OAuth; reuses ~/.codex/auth.json when already logged in
+uv run coronetbot-auth --check
 cp .env.example .env
-# Fill in .env, then:
+# Fill in CB_DISCORD_TOKEN and choose CB_MODE, then:
 set -a; . ./.env; set +a
 uv run coronetbot
 ```
@@ -52,19 +54,24 @@ uv run pytest
 ## Discord application setup
 
 1. Create an application in the [Discord Developer Portal](https://discord.com/developers/applications).
-2. On **Bot**, create/reset the bot token. Put it in `.env` as `DISCORD_TOKEN`; do not
+2. On **Bot**, create/reset the bot token. Put it in `.env` as `CB_DISCORD_TOKEN`; do not
    commit or paste it into chat.
 3. On **Bot → Privileged Gateway Intents**, enable **Message Content Intent**.
 4. On **OAuth2 → URL Generator**, select scopes `bot` and `applications.commands`.
 5. Grant only these bot permissions:
    - View Channels
    - Read Message History
+   - Send Messages
    - Manage Messages
 6. Open the generated URL and install the bot in the server.
 
-For development, set `DISCORD_GUILD_ID` to the test server ID so slash commands sync to
-that server immediately. Leave it unset in production to register commands globally;
-Discord may take up to an hour to propagate them.
+Create exactly one text channel named `#bot-spam` and restrict it to the intended audit
+readers plus the bot. The bot must be able to view and send messages there. It will refuse
+to operate if that channel is absent, duplicated, or inaccessible.
+
+`CB_MODE=dev` selects **Alesya's test server** (`1526764377171296296`);
+`CB_MODE=production` selects **Coronet** (`1439793454153601066`). Slash commands and
+moderation are scoped to the selected server.
 
 The bot's role must be able to view every moderated channel and must sit high enough in
 the server's permission structure to delete messages there. Private channels not visible
@@ -72,55 +79,78 @@ to the bot cannot be moderated.
 
 ## LLM configuration
 
-CoronetBot calls an OpenAI-compatible chat-completions endpoint with JSON mode:
+The backend uses
+[`codex-backend-sdk`](https://pypi.org/project/codex-backend-sdk/) directly to call the
+ChatGPT Codex Responses endpoint with subscription OAuth. It runs `gpt-5.6-sol` at high
+reasoning effort and requests a strict Pydantic-derived JSON schema. There is no pi,
+Codex CLI, Node.js, or per-message subprocess in the runtime.
 
 | Variable | Required | Default |
 |---|---:|---|
-| `DISCORD_TOKEN` | yes | — |
-| `LLM_API_KEY` | for authenticated endpoints | — |
-| `LLM_BASE_URL` | no | `https://api.openai.com/v1/chat/completions` |
-| `LLM_MODEL` | no | `gpt-4.1-mini` |
-| `RULES_PATH` | no | `RULES.md` |
-| `DISCORD_GUILD_ID` | no | global command registration |
-| `MAX_CONCURRENCY` | no | `8` |
-| `LLM_TIMEOUT_SECONDS` | no | `30` |
-| `LLM_RETRIES` | no | `2` |
+| `CB_DISCORD_TOKEN` | yes | — |
+| `CB_MODE` | no | `dev` |
+| `CB_LLM_MODEL` | no | `gpt-5.6-sol` |
+| `CB_LLM_THINKING` | no | `high` |
+| `CB_RULES_PATH` | no | `RULES.md` |
+| `CB_MAX_CONCURRENCY` | no | `2` |
+| `CB_LLM_TIMEOUT_SECONDS` | no | `120` |
+| `CB_LLM_RETRIES` | no | `2` |
+| `CB_CODEX_HOME` | no | `~/.codex` |
 
-The selected endpoint must support `response_format: {"type": "json_object"}`. Model
-calls are bounded by a concurrency semaphore and retry transient errors with exponential
-backoff.
+Calls are bounded by a concurrency semaphore. Authentication/refresh operations are
+serialized, while API requests use independent clients and may run concurrently. Keep
+concurrency conservative because ChatGPT subscription limits differ from API limits.
+
+`codex-backend-sdk` is an unofficial community library over undocumented ChatGPT
+endpoints. It is pinned exactly; backend changes may require an SDK upgrade.
 
 ## Container deployment
 
+First authenticate on a machine with a browser using `uv run coronetbot-auth`. Securely
+transfer `~/.codex/auth.json` to the server, then seed the container's credential volume:
+
 ```sh
 cp .env.example .env
-# Fill in .env and update RULES.md
-docker compose up --build -d
+# Fill in CB_DISCORD_TOKEN/CB_MODE and place auth.json temporarily on the server, then:
+docker compose build
+docker compose run --rm -T bot sh -c 'umask 077; cat > "$CB_CODEX_HOME/auth.json"' < auth.json
+rm auth.json
+docker compose run --rm -T bot coronetbot-auth --check
+docker compose up -d
 docker compose logs -f bot
 ```
 
-The container runs as an unprivileged user and mounts `RULES.md` read-only. Restart it
-after changing rules or environment variables.
+The Python-only container runs as an unprivileged user, mounts `RULES.md` read-only, and
+stores OAuth credentials in the `codex_auth` Docker volume so SDK token refreshes survive
+container replacement. Treat both the source credential file and that volume as secrets;
+never put either in logs, source control, images, or chat. Restart the service after
+changing rules or environment variables.
 
-## Privacy and operational behaviour
+## Audit retention and operational behaviour
 
-- CoronetBot does not persist message bodies and deliberately omits them from logs.
-- Message text and active rules are sent to the configured LLM provider. Confirm that
-  provider's retention/privacy policy before production use.
-- Discord and the LLM provider may independently retain data; deleting a Discord message
-  is not a guarantee of erasure from their systems.
-- If a user has DMs disabled, the bot still deletes a confirmed violating message and
-  records only IDs and rule names in its operational log.
-- Attachment-only messages are currently left untouched; attached file contents are not
-  downloaded or sent to the model.
-- Messages from bots and webhooks are ignored to avoid automation loops.
+- Every in-scope user message is copied to `#bot-spam` with its author, location,
+  attachments, moderation judgement, bot response, and action outcome. `/validate`,
+  `/rules`, and `/help` inputs/responses are also audited.
+- Audit records are retained by Discord according to the server's retention practices.
+  Access to `#bot-spam` should therefore be tightly restricted.
+- The bot never moderates `#bot-spam` itself, bot messages, or webhooks; this prevents
+  recursive audit loops.
+- If the initial audit record or a blocked judgement cannot be written, moderation fails
+  open and the source message is not deleted.
+- Message text and active rules are also sent through the ChatGPT Codex subscription
+  provider. Confirm its current retention/privacy policy before production use.
+- Discord and the LLM provider may independently retain data; deleting a public Discord
+  message is not erasure from `#bot-spam` or provider systems.
+- Attachment metadata and URLs are audited, but file contents are not downloaded or sent
+  to the model. Attachment-only messages are not classified.
 
 ## Behaviour
 
 A removal DM follows this structure (split across messages when Discord's 2,000-character
 limit requires it):
 
-> Your message in **#general** was removed and has not been retained publicly.
+> Your message in **#general** was removed from public view. A moderation audit
+> containing the draft and decision is retained in **#bot-spam**.
 >
 > **Original draft:**
 > > complete original message

@@ -5,3 +5,7 @@ services:
     env_file: .env
     volumes:
       - ./RULES.md:/app/RULES.md:ro
+      - codex_auth:/var/lib/coronetbot/codex
+
+volumes:
+  codex_auth:

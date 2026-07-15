@@ -1,4 +1,5 @@
 .env
+/auth.json
 .venv/
 __pycache__/
 .pytest_cache/

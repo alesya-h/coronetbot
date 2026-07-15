@@ -8,10 +8,12 @@ from discord import app_commands
 
 from . import __version__
 from .config import Config
-from .formatting import chunks, removal_notice, validation_notice
+from .formatting import chunks, quote, reasons, removal_notice, validation_notice
 from .moderator import ModerationServiceError, Moderator
+from .models import ModerationResult
 
 LOG = logging.getLogger(__name__)
+AUDIT_CHANNEL_NAME = "bot-spam"
 
 
 class CoronetClient(discord.Client):
@@ -22,10 +24,10 @@ class CoronetClient(discord.Client):
         self.config = config
         self.rules = rules
         self.tree = app_commands.CommandTree(self)
+        self.audit_channel: discord.TextChannel | None = None
         self.moderator = Moderator(
-            api_url=config.llm_base_url,
-            api_key=config.llm_api_key,
             model=config.llm_model,
+            thinking=config.llm_thinking,
             rules=rules,
             max_concurrency=config.max_concurrency,
             timeout_seconds=config.llm_timeout_seconds,
@@ -35,14 +37,10 @@ class CoronetClient(discord.Client):
 
     async def setup_hook(self) -> None:
         await self.moderator.__aenter__()
-        if self.config.guild_id is not None:
-            guild = discord.Object(id=self.config.guild_id)
-            self.tree.copy_global_to(guild=guild)
-            await self.tree.sync(guild=guild)
-            LOG.info("Synced commands to development guild %s", self.config.guild_id)
-        else:
-            await self.tree.sync()
-            LOG.info("Synced global commands")
+        guild = discord.Object(id=self.config.guild_id)
+        self.tree.copy_global_to(guild=guild)
+        await self.tree.sync(guild=guild)
+        LOG.info("Synced commands to %s (%s)", self.config.guild_name, self.config.guild_id)
 
     async def close(self) -> None:
         await self.moderator.__aexit__()
@@ -50,36 +48,102 @@ class CoronetClient(discord.Client):
 
     async def on_ready(self) -> None:
         assert self.user is not None
-        LOG.info("Logged in as %s (%s), model=%s", self.user, self.user.id, self.config.llm_model)
+        guild = self.get_guild(self.config.guild_id)
+        if guild is None:
+            LOG.critical(
+                "Bot is not installed in configured %s server %s",
+                self.config.guild_name,
+                self.config.guild_id,
+            )
+            await self.close()
+            return
+
+        matches = [channel for channel in guild.text_channels if channel.name == AUDIT_CHANNEL_NAME]
+        if len(matches) != 1:
+            LOG.critical(
+                "Expected exactly one #%s in guild %s; found %s",
+                AUDIT_CHANNEL_NAME,
+                guild.id,
+                len(matches),
+            )
+            await self.close()
+            return
+        self.audit_channel = matches[0]
+
+        member = guild.me
+        permissions = self.audit_channel.permissions_for(member) if member else None
+        if permissions is None or not permissions.view_channel or not permissions.send_messages:
+            LOG.critical("Bot cannot view and send messages in audit channel %s", self.audit_channel.id)
+            await self.close()
+            return
+
+        LOG.info(
+            "Logged in as %s (%s), mode=%s guild=%s audit_channel=%s model=%s thinking=%s",
+            self.user,
+            self.user.id,
+            self.config.mode,
+            guild.id,
+            self.audit_channel.id,
+            self.config.llm_model,
+            self.config.llm_thinking,
+        )
 
     async def on_message(self, message: discord.Message) -> None:
-        # Server messages only. Ignore bots/webhooks to prevent loops and bot-on-bot moderation.
-        if message.guild is None or message.author.bot or message.webhook_id is not None:
+        # Only the mode-selected server is in scope. Ignore automation and the audit
+        # channel itself to prevent bot-on-bot and audit recursion.
+        if (
+            message.guild is None
+            or message.guild.id != self.config.guild_id
+            or message.author.bot
+            or message.webhook_id is not None
+            or (self.audit_channel is not None and message.channel.id == self.audit_channel.id)
+        ):
             return
+
+        if not await self._audit(self._received_audit(message)):
+            LOG.error("Audit unavailable; message left intact (message=%s)", message.id)
+            return
+
         if not message.content.strip():
+            await self._audit(
+                self._judgement_audit(
+                    message,
+                    "ALLOWED — no textual content; attachments were logged but not analysed.",
+                )
+            )
             return
 
         try:
             result = await self.moderator.moderate(message.content)
         except ModerationServiceError:
-            # Fail open: uncertain or unavailable moderation must never delete user content.
             LOG.exception(
                 "Moderation unavailable; message left intact (guild=%s channel=%s message=%s)",
                 message.guild.id,
                 message.channel.id,
                 message.id,
             )
+            await self._audit(
+                self._judgement_audit(message, "ERROR — classifier unavailable; failed open.")
+            )
             return
 
         if result.allowed:
+            await self._audit(self._judgement_audit(message, "ALLOWED — no rules violated."))
             return
 
         channel_name = getattr(message.channel, "name", "unknown")
         notice = removal_notice(channel_name, message.content, result)
+        decision_audit = self._blocked_audit(message, result, notice)
+        if not await self._audit(decision_audit):
+            LOG.error("Could not audit blocked decision; message left intact (message=%s)", message.id)
+            return
+
+        dm_status = "sent"
         try:
             for part in chunks(notice):
                 await message.author.send(part, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
+            dm_status = "failed"
             LOG.warning(
                 "Could not DM moderated user (guild=%s channel=%s message=%s user=%s)",
                 message.guild.id,
@@ -88,6 +152,7 @@ class CoronetClient(discord.Client):
                 message.author.id,
             )
 
+        delete_status = "deleted"
         try:
             await message.delete()
             LOG.info(
@@ -99,6 +164,7 @@ class CoronetClient(discord.Client):
                 ", ".join(v.rule for v in result.violations),
             )
         except discord.HTTPException:
+            delete_status = "failed"
             LOG.exception(
                 "Could not delete rule-breaking message (guild=%s channel=%s message=%s)",
                 message.guild.id,
@@ -106,22 +172,106 @@ class CoronetClient(discord.Client):
                 message.id,
             )
 
+        await self._audit(
+            f"**Moderation actions** — message `{message.id}`\n"
+            f"DM delivery: **{dm_status}**\nDeletion: **{delete_status}**"
+        )
+
+    async def _audit(self, text: str) -> bool:
+        channel = self.audit_channel
+        if channel is None:
+            LOG.error("Audit channel is not ready")
+            return False
+        try:
+            for part in chunks(text):
+                await channel.send(part, allowed_mentions=discord.AllowedMentions.none())
+            return True
+        except discord.HTTPException:
+            LOG.exception("Could not write to audit channel %s", channel.id)
+            return False
+
+    def _received_audit(self, message: discord.Message) -> str:
+        channel_name = getattr(message.channel, "name", "unknown")
+        body = message.content if message.content else "_(no text content)_"
+        attachment_lines = [
+            f"- `{attachment.filename}` ({attachment.size} bytes, "
+            f"{attachment.content_type or 'unknown type'}): {attachment.url}"
+            for attachment in message.attachments
+        ]
+        attachments = "\n".join(attachment_lines) if attachment_lines else "None"
+        return (
+            "**Message received**\n"
+            f"Message: `{message.id}` · [jump]({message.jump_url})\n"
+            f"Author: `{message.author}` (`{message.author.id}`)\n"
+            f"Channel: `#{channel_name}` (`{message.channel.id}`)\n\n"
+            f"**Content**\n{quote(body)}\n\n"
+            f"**Attachments**\n{attachments}"
+        )
+
+    @staticmethod
+    def _judgement_audit(message: discord.Message, judgement: str) -> str:
+        return f"**Moderation judgement** — message `{message.id}`\n{judgement}\nBot response: None."
+
+    @staticmethod
+    def _blocked_audit(
+        message: discord.Message, result: ModerationResult, notice: str
+    ) -> str:
+        return (
+            f"**Moderation judgement** — message `{message.id}`\n"
+            f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
+            f"**Bot response (removal DM)**\n{quote(notice)}"
+        )
+
+    def _interaction_context(self, interaction: discord.Interaction) -> str:
+        if interaction.guild is None:
+            return "DM"
+        channel_id = interaction.channel_id
+        return f"guild `{interaction.guild.id}`, channel `{channel_id}`"
+
     def _register_commands(self) -> None:
         @self.tree.command(name="validate", description="Validate and refine a draft message")
         @app_commands.describe(text="The draft to validate before posting")
         async def validate(interaction: discord.Interaction, text: str) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
+            request_audit = (
+                "**Validation request**\n"
+                f"User: `{interaction.user}` (`{interaction.user.id}`)\n"
+                f"Context: {self._interaction_context(interaction)}\n\n"
+                f"**Draft**\n{quote(text)}"
+            )
+            if not await self._audit(request_audit):
+                await _send_followups(
+                    interaction,
+                    "⚠️ Validation is unavailable because audit logging is unavailable.",
+                )
+                return
+
             try:
                 result = await self.moderator.moderate(text)
                 output = validation_notice(text, result)
+                judgement = "ALLOWED" if result.allowed else f"BLOCKED\n\n{reasons(result)}"
             except ModerationServiceError:
                 LOG.exception("Validation unavailable (user=%s)", interaction.user.id)
                 output = "⚠️ Validation is temporarily unavailable. Your draft was not assessed."
+                judgement = "ERROR — classifier unavailable."
+
+            response_audit = (
+                "**Validation judgement and bot response**\n"
+                f"User: `{interaction.user.id}`\nJudgement: **{judgement}**\n\n"
+                f"**Bot response**\n{quote(output)}"
+            )
+            if not await self._audit(response_audit):
+                output = "⚠️ Validation completed, but the response could not be audited. Try again later."
             await _send_followups(interaction, output)
 
         @self.tree.command(name="rules", description="Show the current moderation rules")
         async def rules_command(interaction: discord.Interaction) -> None:
             await interaction.response.defer(ephemeral=True)
+            await self._audit(
+                "**Command and bot response**\n"
+                f"User: `{interaction.user}` (`{interaction.user.id}`)\nCommand: `/rules`\n\n"
+                f"**Bot response**\n{quote(self.rules)}"
+            )
             await _send_followups(interaction, self.rules)
 
         @self.tree.command(name="help", description="Show CoronetBot commands and configuration")
@@ -131,10 +281,18 @@ class CoronetClient(discord.Client):
                 "`/validate text` — validate and refine a draft before posting\n"
                 "`/rules` — show the moderation rules\n"
                 "`/help` — show this message\n\n"
-                f"LLM model: `{self.config.llm_model}`\n"
+                f"Mode: `{self.config.mode}` (`{self.config.guild_name}`)\n"
+                f"LLM: `codex/{self.config.llm_model}` "
+                f"(`{self.config.llm_thinking}` reasoning)\n"
                 f"Rules file: `{self.config.rules_path}`\n"
+                "Messages, judgements, and bot responses are retained in `#bot-spam`.\n"
                 "Moderation failures fail open: messages are not deleted unless the classifier "
                 "returns a valid rule violation."
+            )
+            await self._audit(
+                "**Command and bot response**\n"
+                f"User: `{interaction.user}` (`{interaction.user.id}`)\nCommand: `/help`\n\n"
+                f"**Bot response**\n{quote(output)}"
             )
             await interaction.response.send_message(output, ephemeral=True)
 

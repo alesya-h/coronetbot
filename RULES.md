@@ -1,7 +1,7 @@
 # Moderation rules
 
-> These are provisional defaults inferred from the project specification. Replace them
-> with the Coronet server's canonical rules before production deployment.
+> This is the initial policy inferred from the project specification. It will be refined
+> incrementally as real moderation cases reveal gaps or ambiguity.
 
 ## 1. No personal attacks
 

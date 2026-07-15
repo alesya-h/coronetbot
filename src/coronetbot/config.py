@@ -9,6 +9,13 @@ class ConfigurationError(ValueError):
     pass
 
 
+THINKING_LEVELS = {"minimal", "low", "medium", "high", "xhigh"}
+SERVERS = {
+    "production": (1439793454153601066, "Coronet"),
+    "dev": (1526764377171296296, "Alesya's test server"),
+}
+
+
 def _integer(name: str, default: int, minimum: int = 1) -> int:
     raw = os.environ.get(name, str(default))
     try:
@@ -23,45 +30,55 @@ def _integer(name: str, default: int, minimum: int = 1) -> int:
 @dataclass(frozen=True, slots=True)
 class Config:
     discord_token: str
-    llm_api_key: str | None
-    llm_base_url: str
+    mode: str
+    guild_id: int
+    guild_name: str
     llm_model: str
+    llm_thinking: str
     rules_path: Path
-    guild_id: int | None
     max_concurrency: int
     llm_timeout_seconds: int
     llm_retries: int
 
     @classmethod
     def from_env(cls) -> Config:
-        discord_token = os.environ.get("DISCORD_TOKEN", "").strip()
+        discord_token = os.environ.get("CB_DISCORD_TOKEN", "").strip()
         if not discord_token:
-            raise ConfigurationError("DISCORD_TOKEN is required")
+            raise ConfigurationError("CB_DISCORD_TOKEN is required")
 
-        raw_guild_id = os.environ.get("DISCORD_GUILD_ID", "").strip()
-        try:
-            guild_id = int(raw_guild_id) if raw_guild_id else None
-        except ValueError as exc:
-            raise ConfigurationError("DISCORD_GUILD_ID must be an integer") from exc
+        mode = os.environ.get("CB_MODE", "dev").strip()
+        if mode not in SERVERS:
+            raise ConfigurationError("CB_MODE must be 'dev' or 'production'")
+        guild_id, guild_name = SERVERS[mode]
 
-        rules_path = Path(os.environ.get("RULES_PATH", "RULES.md"))
+        rules_path = Path(os.environ.get("CB_RULES_PATH", "RULES.md"))
         if not rules_path.is_file():
             raise ConfigurationError(f"rules file does not exist: {rules_path}")
 
-        base_url = os.environ.get(
-            "LLM_BASE_URL", "https://api.openai.com/v1/chat/completions"
-        ).strip()
-        if not base_url.startswith(("http://", "https://")):
-            raise ConfigurationError("LLM_BASE_URL must be an HTTP(S) URL")
+        thinking = os.environ.get("CB_LLM_THINKING", "high").strip()
+        if thinking not in THINKING_LEVELS:
+            levels = ", ".join(sorted(THINKING_LEVELS))
+            raise ConfigurationError(f"CB_LLM_THINKING must be one of: {levels}")
+
+        model = os.environ.get("CB_LLM_MODEL", "gpt-5.6-sol").strip()
+        if not model:
+            raise ConfigurationError("CB_LLM_MODEL must not be empty")
+
+        codex_home = os.environ.get("CB_CODEX_HOME", "").strip()
+        if codex_home:
+            # codex-backend-sdk reads CODEX_HOME directly. Keep the public bot
+            # configuration consistently CB_-prefixed and bridge it here.
+            os.environ["CODEX_HOME"] = codex_home
 
         return cls(
             discord_token=discord_token,
-            llm_api_key=os.environ.get("LLM_API_KEY") or None,
-            llm_base_url=base_url,
-            llm_model=os.environ.get("LLM_MODEL", "gpt-4.1-mini").strip(),
-            rules_path=rules_path,
+            mode=mode,
             guild_id=guild_id,
-            max_concurrency=_integer("MAX_CONCURRENCY", 8),
-            llm_timeout_seconds=_integer("LLM_TIMEOUT_SECONDS", 30),
-            llm_retries=_integer("LLM_RETRIES", 2, minimum=0),
+            guild_name=guild_name,
+            llm_model=model,
+            llm_thinking=thinking,
+            rules_path=rules_path,
+            max_concurrency=_integer("CB_MAX_CONCURRENCY", 2),
+            llm_timeout_seconds=_integer("CB_LLM_TIMEOUT_SECONDS", 120),
+            llm_retries=_integer("CB_LLM_RETRIES", 2, minimum=0),
         )
