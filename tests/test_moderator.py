@@ -57,3 +57,27 @@ async def test_codex_backend_uses_structured_ephemeral_request(
     assert captured["reasoning"] == {"effort": "high"}
     assert captured["store"] is False
     assert captured["text_format"] is _ModerationOutput
+
+
+@pytest.mark.asyncio
+async def test_title_only_thread_is_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Responses:
+        def parse(self, **_kwargs: object) -> object:
+            parsed = _ModerationOutput(
+                allowed=True,
+                violations=[],
+                suggested_revision=None,
+            )
+            return SimpleNamespace(output_parsed=parsed)
+
+    moderator = Moderator(model="gpt-5.6-sol", rules="Be civil")
+
+    async def new_client() -> object:
+        return SimpleNamespace(responses=Responses())
+
+    monkeypatch.setattr(moderator, "_new_client", new_client)
+    result = await moderator.moderate(
+        "",
+        context=ModerationContext(proposed_title="A thread title"),
+    )
+    assert result.allowed

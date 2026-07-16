@@ -70,6 +70,7 @@ uv run pytest
    - Read Message History
    - Send Messages
    - Manage Messages
+   - Manage Threads
 6. Open the generated URL and install the bot in the server.
 
 Create exactly one text channel named `#bot-spam` and restrict it to the intended audit
@@ -81,8 +82,10 @@ to operate if that channel is absent, duplicated, or inaccessible.
 moderation are scoped to the selected server.
 
 The bot's role must be able to view every moderated channel and must sit high enough in
-the server's permission structure to delete messages there. Private channels not visible
-to the bot cannot be moderated.
+the server's permission structure to delete messages and threads there. When a new forum
+post or chat-thread starter is rejected, the entire thread container is deleted so a
+rule-breaking title cannot remain visible. Private channels not visible to the bot cannot
+be moderated.
 
 ## LLM configuration
 
@@ -110,8 +113,9 @@ Calls are bounded by a concurrency semaphore. Authentication/refresh operations 
 serialized, while API requests use independent clients and may run concurrently. Keep
 concurrency conservative because ChatGPT subscription limits differ from API limits.
 
-The bot stores the highest processed message ID per channel in `CB_STATE_PATH`. On startup
-it fetches and processes visible messages newer than that cursor. For channels with no
+The bot stores the highest processed message ID per channel and a hash of each reviewed
+thread title in `CB_STATE_PATH`. On startup it fetches and processes visible messages newer
+than that cursor and reviews active titles that are new or renamed. For channels with no
 cursor yet, it processes visible recent history up to `CB_BACKFILL_LOOKBACK_SECONDS` old;
 set this to `0` before a first production launch if you want to start from a clean
 baseline instead of moderating recent pre-existing messages.

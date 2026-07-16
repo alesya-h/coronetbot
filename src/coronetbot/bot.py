@@ -113,8 +113,134 @@ class CoronetClient(discord.Client):
         await self._backfill_complete.wait()
         await self._process_message(message, source="live")
 
+    async def on_thread_create(self, thread: discord.Thread) -> None:
+        await self._backfill_complete.wait()
+        await self._process_thread_title(thread, source="thread_create")
+
+    async def on_thread_update(self, before: discord.Thread, after: discord.Thread) -> None:
+        if before.name == after.name:
+            return
+        await self._backfill_complete.wait()
+        await self._process_thread_title(after, source="thread_rename")
+
+    async def _process_thread_title(self, thread: discord.Thread, *, source: str) -> bool:
+        if thread.guild.id != self.config.guild_id:
+            return False
+        async with self._channel_locks[thread.id]:
+            if await self.state.thread_title_seen(thread.id, thread.name):
+                return False
+
+            starter = await self._fetch_message(thread, thread.id)
+            if starter is None:
+                try:
+                    starter = await anext(thread.history(limit=1, oldest_first=True), None)
+                except discord.HTTPException:
+                    starter = None
+            body = starter.content if starter is not None else ""
+            author = starter.author if starter is not None else thread.owner
+            parent = thread.parent
+            is_forum = isinstance(parent, discord.ForumChannel)
+            parent_name = getattr(parent, "name", "unknown")
+            context = ModerationContext(
+                channel_type="forum_post" if is_forum else "general_chat",
+                channel_name=parent_name,
+                channel_description=getattr(parent, "topic", None) or "",
+                forum_rules_version="forum-rules.md (integrated policy)" if is_forum else None,
+                thread_title=thread.name,
+                thread_root=body or None,
+                requested_action=self._requested_action(body),
+                proposed_title=thread.name,
+                attachments=(
+                    [
+                        {
+                            "filename": attachment.filename,
+                            "content_type": attachment.content_type,
+                            "size": attachment.size,
+                            "source_url": attachment.url,
+                            "extracted_text": None,
+                        }
+                        for attachment in starter.attachments
+                    ]
+                    if starter is not None
+                    else []
+                ),
+            )
+            original_draft = f"Title: {thread.name}" + (f"\n\n{body}" if body else "")
+            received = (
+                f"**Thread title received** ({source})\n"
+                f"Thread: `{thread.id}` · Parent: `#{parent_name}`\n"
+                f"Author: `{author}` (`{getattr(author, 'id', thread.owner_id)}`)\n\n"
+                f"**Draft**\n{quote(original_draft)}"
+            )
+            if not await self._audit(received):
+                return False
+
+            try:
+                result = await self.moderator.moderate(body, context=context)
+            except ModerationServiceError:
+                LOG.exception("Thread-title moderation unavailable (thread=%s)", thread.id)
+                if await self._audit(
+                    f"**Thread-title judgement** — thread `{thread.id}`\n"
+                    "ERROR — classifier unavailable; failed open."
+                ):
+                    await self.state.mark_thread_title(thread.id, thread.name)
+                return False
+
+            if result.allowed:
+                if await self._audit(
+                    f"**Thread-title judgement** — thread `{thread.id}`\n"
+                    "ALLOWED — no rules violated.\nBot response: None."
+                ):
+                    await self.state.mark_thread_title(thread.id, thread.name)
+                return False
+
+            notice = removal_notice(parent_name, original_draft, result)
+            if not await self._audit(
+                f"**Thread-title judgement** — thread `{thread.id}`\n"
+                f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
+                f"**Bot response (removal DM)**\n{quote(notice)}"
+            ):
+                return False
+
+            dm_status = "not sent; author unavailable"
+            if author is not None:
+                dm_status = "sent"
+                try:
+                    for part in chunks(notice):
+                        await author.send(part, allowed_mentions=discord.AllowedMentions.none())
+                except discord.HTTPException:
+                    dm_status = "failed"
+
+            delete_status = "thread deleted"
+            deleted = False
+            try:
+                await thread.delete(reason="CoronetBot moderation decision")
+                deleted = True
+                LOG.info(
+                    "Deleted rule-breaking thread title (guild=%s thread=%s owner=%s rules=%s)",
+                    thread.guild.id,
+                    thread.id,
+                    thread.owner_id,
+                    ", ".join(violation.rule for violation in result.violations),
+                )
+            except discord.HTTPException:
+                delete_status = "thread deletion failed"
+                LOG.exception("Could not delete rule-breaking thread %s", thread.id)
+
+            if await self._audit(
+                f"**Thread-title actions** — thread `{thread.id}`\n"
+                f"DM delivery: **{dm_status}**\nDeletion: **{delete_status}**"
+            ):
+                await self.state.mark_thread_title(thread.id, thread.name)
+                if starter is not None and starter.id == thread.id:
+                    await self.state.mark_processed(thread.id, starter.id)
+            return deleted
+
     async def _process_message(self, message: discord.Message, *, source: str) -> None:
         if not self._message_in_scope(message):
+            return
+        if isinstance(message.channel, discord.Thread) and message.id == message.channel.id:
+            await self._process_thread_title(message.channel, source=source)
             return
         async with self._channel_locks[message.channel.id]:
             await self._process_message_serial(message, source=source)
@@ -183,11 +309,18 @@ class CoronetClient(discord.Client):
                 message.author.id,
             )
 
-        delete_status = "deleted"
+        deletes_thread = context.proposed_title is not None and isinstance(
+            message.channel, discord.Thread
+        )
+        delete_status = "thread deleted" if deletes_thread else "message deleted"
         try:
-            await message.delete()
+            if deletes_thread:
+                await message.channel.delete(reason="CoronetBot moderation decision")
+            else:
+                await message.delete()
             LOG.info(
-                "Deleted rule-breaking message (guild=%s channel=%s message=%s user=%s rules=%s)",
+                "Deleted rule-breaking %s (guild=%s channel=%s message=%s user=%s rules=%s)",
+                "thread" if deletes_thread else "message",
                 message.guild.id,
                 message.channel.id,
                 message.id,
@@ -195,9 +328,12 @@ class CoronetClient(discord.Client):
                 ", ".join(v.rule for v in result.violations),
             )
         except discord.HTTPException:
-            delete_status = "failed"
+            delete_status = (
+                "thread deletion failed" if deletes_thread else "message deletion failed"
+            )
             LOG.exception(
-                "Could not delete rule-breaking message (guild=%s channel=%s message=%s)",
+                "Could not delete rule-breaking %s (guild=%s channel=%s message=%s)",
+                "thread" if deletes_thread else "message",
                 message.guild.id,
                 message.channel.id,
                 message.id,
@@ -228,18 +364,20 @@ class CoronetClient(discord.Client):
         proposed_title: str | None = None
         forum_rules_version: str | None = None
 
-        if isinstance(channel, discord.Thread) and isinstance(channel.parent, discord.ForumChannel):
-            channel_description = channel.parent.topic or ""
+        if isinstance(channel, discord.Thread):
             thread_title = channel.name
-            forum_rules_version = "forum-rules.md (integrated policy)"
             if message.id == channel.id:
-                channel_type = "forum_post"
                 proposed_title = channel.name
                 thread_root = message.content
-            else:
-                channel_type = "forum_reply"
-                starter = await self._fetch_message(channel, channel.id)
-                thread_root = starter.content if starter is not None else None
+            if isinstance(channel.parent, discord.ForumChannel):
+                channel_description = channel.parent.topic or ""
+                forum_rules_version = "forum-rules.md (integrated policy)"
+                if message.id == channel.id:
+                    channel_type = "forum_post"
+                else:
+                    channel_type = "forum_reply"
+                    starter = await self._fetch_message(channel, channel.id)
+                    thread_root = starter.content if starter is not None else None
 
         reply_target: str | None = None
         reference = message.reference
@@ -353,6 +491,14 @@ class CoronetClient(discord.Client):
             cursor = await self.state.cursor(channel.id)
             after = discord.Object(id=cursor) if cursor is not None else cutoff
             try:
+                # Message-created chat threads and forum posts expose their title only
+                # through the thread container. Fetch the starter explicitly because
+                # thread.history() does not consistently include it.
+                if isinstance(channel, discord.Thread):
+                    deleted = await self._process_thread_title(channel, source="backfill_thread")
+                    processed += 1
+                    if deleted:
+                        continue
                 async for message in channel.history(
                     limit=None,
                     after=after,

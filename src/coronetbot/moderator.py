@@ -140,9 +140,9 @@ class Moderator:
         *,
         context: ModerationContext | None = None,
     ) -> ModerationResult:
-        if not text.strip():
-            return ModerationResult(allowed=True)
         context = context or ModerationContext()
+        if not text.strip() and not context.proposed_title:
+            return ModerationResult(allowed=True)
 
         async with self.semaphore:
             try:

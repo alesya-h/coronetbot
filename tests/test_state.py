@@ -12,12 +12,15 @@ def test_state_store_marks_and_loads_cursors(tmp_path: Path) -> None:
     asyncio.run(store.mark_processed(10, 100))
     asyncio.run(store.mark_processed(10, 90))
     asyncio.run(store.mark_processed(11, 50))
+    asyncio.run(store.mark_thread_title(20, "A thread"))
 
     assert json.loads(path.read_text())["channel_cursors"] == {"10": "100", "11": "50"}
     loaded = StateStore.load(path)
     assert asyncio.run(loaded.seen(10, 100))
     assert asyncio.run(loaded.seen(10, 99))
     assert not asyncio.run(loaded.seen(10, 101))
+    assert asyncio.run(loaded.thread_title_seen(20, "A thread"))
+    assert not asyncio.run(loaded.thread_title_seen(20, "Renamed thread"))
 
 
 def test_state_store_ignores_corrupt_file(tmp_path: Path) -> None:
