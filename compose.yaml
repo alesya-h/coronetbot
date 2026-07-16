@@ -3,6 +3,18 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     volumes:
       - ./RULES.md:/app/RULES.md:ro
       - codex_auth:/var/lib/coronetbot/codex
