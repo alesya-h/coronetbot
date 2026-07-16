@@ -5,7 +5,8 @@ LLM-based moderation bot for the Coronet strata Discord community.
 For each new text message, reply, thread message, or forum post in the server, the bot
 checks the configured rules. Allowed messages are left untouched. For a clear violation,
 the bot DMs the author with the original draft, reasons, and a suggested revision, then
-deletes the public message. Classifier failures **fail open** and never delete a message.
+deletes the public message. If classification or audit logging fails, the bot leaves the
+message in place.
 
 ## Commands
 
@@ -26,7 +27,7 @@ inputs rather than runtime prompts that must be copied verbatim.
 
 The model must return a structured decision. CoronetBot validates that every cited quote
 is an exact substring of the proposed title/body and that blocked decisions include both
-a violation and a suggested revision. Invalid responses fail open.
+a violation and a suggested revision. An invalid response leaves the message in place.
 
 Reviews include the channel type/name/description, forum title and root post, reply target,
 recent context, recent same-author messages, and attachment metadata when available. This

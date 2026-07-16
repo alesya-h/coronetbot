@@ -698,8 +698,7 @@ class CoronetClient(discord.Client):
                 f"LLM: `codex/{self.config.llm_model}` "
                 f"(`{self.config.llm_thinking}` reasoning)\n"
                 f"Rules file: `{self.config.rules_path}`\n"
-                "Moderation failures fail open: messages are not deleted unless the classifier "
-                "returns a valid rule violation."
+                "If moderation or audit logging fails, the bot leaves the message in place."
             )
             await self._audit(
                 "**Command and bot response**\n"
