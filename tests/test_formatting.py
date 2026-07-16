@@ -1,4 +1,4 @@
-from coronetbot.formatting import chunks, quote, removal_notice
+from coronetbot.formatting import chunks, quote, removal_notice, validation_notice
 from coronetbot.models import ModerationResult, Violation
 
 
@@ -26,3 +26,9 @@ def test_removal_notice_contains_required_sections() -> None:
     assert "Suggested revision" in notice
     assert "/validate" in notice
     assert "/rules" in notice
+    assert "bot-spam" not in notice
+
+
+def test_validation_notice_does_not_expose_internal_audit_channel() -> None:
+    allowed = ModerationResult(allowed=True)
+    assert "bot-spam" not in validation_notice("draft", allowed)

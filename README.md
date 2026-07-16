@@ -171,8 +171,7 @@ rules or environment variables.
 A removal DM follows this structure (split across messages when Discord's 2,000-character
 limit requires it):
 
-> Your message in **#general** was removed from public view. A moderation audit
-> containing the draft and decision is retained in **#bot-spam**.
+> Your message in **#general** was removed.
 >
 > **Original draft:**
 > > complete original message

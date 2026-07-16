@@ -24,8 +24,7 @@ def reasons(result: ModerationResult) -> str:
 def removal_notice(channel: str, original: str, result: ModerationResult) -> str:
     assert not result.allowed and result.suggested_revision is not None
     return (
-        f"Your message in **#{channel}** was removed from public view. A moderation "
-        "audit containing the draft and decision is retained in **#bot-spam**.\n\n"
+        f"Your message in **#{channel}** was removed.\n\n"
         f"**Original draft:**\n{quote(original)}\n\n"
         f"**Reasons:**\n{reasons(result)}\n\n"
         f"**Suggested revision:**\n{quote(result.suggested_revision)}\n\n"
@@ -37,14 +36,13 @@ def removal_notice(channel: str, original: str, result: ModerationResult) -> str
 
 
 def validation_notice(original: str, result: ModerationResult) -> str:
-    audit_disclosure = "\n\n_This validation and response were logged to #bot-spam._"
     if result.allowed:
-        return "✅ This draft passes the current moderation rules." + audit_disclosure
+        return "✅ This draft passes the current moderation rules."
     assert result.suggested_revision is not None
     return (
         f"❌ This draft would be removed.\n\n**Reasons:**\n{reasons(result)}\n\n"
         f"**Suggested revision:**\n{quote(result.suggested_revision)}\n\n"
-        f"**Original draft:**\n{quote(original)}{audit_disclosure}"
+        f"**Original draft:**\n{quote(original)}"
     )
 
 

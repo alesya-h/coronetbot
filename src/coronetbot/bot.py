@@ -698,7 +698,6 @@ class CoronetClient(discord.Client):
                 f"LLM: `codex/{self.config.llm_model}` "
                 f"(`{self.config.llm_thinking}` reasoning)\n"
                 f"Rules file: `{self.config.rules_path}`\n"
-                "Messages, judgements, and bot responses are retained in `#bot-spam`.\n"
                 "Moderation failures fail open: messages are not deleted unless the classifier "
                 "returns a valid rule violation."
             )
