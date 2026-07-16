@@ -13,8 +13,9 @@ deletes the public message. Classifier failures **fail open** and never delete a
 - `/rules` — show the active moderation rules
 - `/help` — show commands, version, model, and configuration
 
-Command responses are ephemeral when invoked in a server. The globally registered
-commands can also be used in a DM with the bot.
+Commands are registered only in the server selected by `CB_MODE`, and their responses are
+ephemeral. They are not available in DMs with the bot. Invoke `/validate` in the channel
+or thread where the draft is intended so the review receives relevant context.
 
 ## Moderation rules
 
@@ -184,6 +185,6 @@ limit requires it):
 > > The reported figures do not appear to match the payment records.  
 > > Could someone review and clarify the discrepancy?
 >
-> You can copy and revise your original draft above. You may use `/validate` here to
-> validate/refine your message before trying to send it again. Use `/rules` to see the
-> active rules.
+> You can copy and revise your original draft above. Return to the server and use
+> `/validate` in the channel or thread where you intend to post. Use `/rules` in the
+> server to see the active rules.

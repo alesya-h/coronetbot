@@ -26,6 +26,8 @@ def test_removal_notice_contains_required_sections() -> None:
     assert "Suggested revision" in notice
     assert "/validate" in notice
     assert "/rules" in notice
+    assert "Return to the server" in notice
+    assert "`/validate` here" not in notice
     assert "bot-spam" not in notice
 
 

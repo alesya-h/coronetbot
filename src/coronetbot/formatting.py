@@ -28,10 +28,10 @@ def removal_notice(channel: str, original: str, result: ModerationResult) -> str
         f"**Original draft:**\n{quote(original)}\n\n"
         f"**Reasons:**\n{reasons(result)}\n\n"
         f"**Suggested revision:**\n{quote(result.suggested_revision)}\n\n"
-        "You can copy and revise your original draft above. You may use `/validate` here "
-        "to validate/refine your message before trying to send it again — that should help "
-        "you avoid triggering slow-mode only for your message to get deleted seconds later. "
-        "Use `/rules` to see the set of rules used for moderation."
+        "You can copy and revise your original draft above. Return to the server and use "
+        "`/validate` in the channel or thread where you intend to post; that gives the bot "
+        "the relevant surrounding context and helps avoid triggering slow-mode before a "
+        "message is removed. Use `/rules` in the server to see the moderation policy."
     )
 
 
