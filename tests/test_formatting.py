@@ -28,9 +28,9 @@ def test_removal_notice_contains_required_sections() -> None:
     assert "/rules" in notice
     assert "Return to the server" in notice
     assert "`/validate` here" not in notice
-    assert "bot-spam" not in notice
+    assert "bot-moderation-audit" not in notice
 
 
 def test_validation_notice_does_not_expose_internal_audit_channel() -> None:
     allowed = ModerationResult(allowed=True)
-    assert "bot-spam" not in validation_notice("draft", allowed)
+    assert "bot-moderation-audit" not in validation_notice("draft", allowed)

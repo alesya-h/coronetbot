@@ -75,7 +75,7 @@ uv run pytest
    - Manage Threads
 6. Open the generated URL and install the bot in the server.
 
-Create exactly one text channel named `#bot-spam` and restrict it to the intended audit
+Create exactly one text channel named `#bot-moderation-audit` and restrict it to the intended audit
 readers plus the bot. The bot must be able to view and send messages there. It will refuse
 to operate if that channel is absent, duplicated, or inaccessible.
 
@@ -150,12 +150,12 @@ rules or environment variables.
 
 ## Audit retention and operational behaviour
 
-- Every in-scope user message is copied to `#bot-spam` with its author, location,
+- Every in-scope user message is copied to `#bot-moderation-audit` with its author, location,
   attachments, moderation judgement, bot response, and action outcome. `/validate`,
   `/rules`, and `/help` inputs/responses are also audited.
 - Audit records are retained by Discord according to the server's retention practices.
-  Access to `#bot-spam` should therefore be tightly restricted.
-- The bot never moderates `#bot-spam` itself, bot messages, or webhooks; this prevents
+  Access to `#bot-moderation-audit` should therefore be tightly restricted.
+- The bot never moderates `#bot-moderation-audit` itself, bot messages, or webhooks; this prevents
   recursive audit loops.
 - If the initial audit record or a blocked judgement cannot be written, moderation fails
   open and the source message is not deleted. Successfully processed messages advance a
@@ -164,7 +164,7 @@ rules or environment variables.
 - Message text and active rules are also sent through the ChatGPT Codex subscription
   provider. Confirm its current retention/privacy policy before production use.
 - Discord and the LLM provider may independently retain data; deleting a public Discord
-  message is not erasure from `#bot-spam` or provider systems.
+  message is not erasure from `#bot-moderation-audit` or provider systems.
 - Attachment metadata and URLs are audited, but file contents are not downloaded or sent
   to the model. Attachment-only messages are not classified.
 

@@ -19,7 +19,7 @@ from .moderator import ModerationContext, ModerationServiceError, Moderator
 from .state import StateStore
 
 LOG = logging.getLogger(__name__)
-AUDIT_CHANNEL_NAME = "bot-spam"
+AUDIT_CHANNEL_NAME = "bot-moderation-audit"
 
 
 class CoronetClient(discord.Client):
