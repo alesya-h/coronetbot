@@ -3,7 +3,17 @@ from types import SimpleNamespace
 
 import pytest
 
-from coronetbot.moderator import Moderator, _ModerationOutput
+from coronetbot.moderator import ModerationContext, Moderator, _ModerationOutput
+
+
+def test_context_quotation_corpus_includes_proposed_title_only() -> None:
+    context = ModerationContext(
+        proposed_title="C: A disputed title",
+        thread_root="context must not count as authored text",
+    )
+    corpus = context.quotation_corpus("Body text")
+    assert corpus == "C: A disputed title\nBody text"
+    assert "context must not count" not in corpus
 
 
 def test_rules_are_inserted_without_interpreting_json_braces() -> None:
@@ -35,10 +45,14 @@ async def test_codex_backend_uses_structured_ephemeral_request(
         return client
 
     monkeypatch.setattr(moderator, "_new_client", new_client)
-    result = await moderator.moderate("A private draft")
+    context = ModerationContext(channel_type="forum_reply", thread_title="Q: Test")
+    result = await moderator.moderate("A private draft", context=context)
 
     assert result.allowed
-    assert json.loads(captured["input"]) == {"message": "A private draft"}
+    payload = json.loads(captured["input"])
+    assert payload["proposed_message"] == "A private draft"
+    assert payload["channel_type"] == "forum_reply"
+    assert payload["thread_title"] == "Q: Test"
     assert captured["model"] == "gpt-5.6-sol"
     assert captured["reasoning"] == {"effort": "high"}
     assert captured["store"] is False

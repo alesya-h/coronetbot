@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
+from collections import defaultdict
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,7 +15,7 @@ from . import __version__
 from .config import Config
 from .formatting import chunks, quote, reasons, removal_notice, validation_notice
 from .models import ModerationResult
-from .moderator import ModerationServiceError, Moderator
+from .moderator import ModerationContext, ModerationServiceError, Moderator
 from .state import StateStore
 
 LOG = logging.getLogger(__name__)
@@ -30,6 +33,8 @@ class CoronetClient(discord.Client):
         self.audit_channel: discord.TextChannel | None = None
         self.state = StateStore.load(config.state_path)
         self._ready_once = False
+        self._backfill_complete = asyncio.Event()
+        self._channel_locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.moderator = Moderator(
             model=config.llm_model,
             thinking=config.llm_thinking,
@@ -97,14 +102,24 @@ class CoronetClient(discord.Client):
         )
         if not self._ready_once:
             self._ready_once = True
-            await self._backfill_missed_messages(guild)
+            try:
+                await self._backfill_missed_messages(guild)
+            finally:
+                self._backfill_complete.set()
 
     async def on_message(self, message: discord.Message) -> None:
+        # Do not let a newer live message advance a channel cursor past older messages
+        # while startup history is still being replayed.
+        await self._backfill_complete.wait()
         await self._process_message(message, source="live")
 
     async def _process_message(self, message: discord.Message, *, source: str) -> None:
         if not self._message_in_scope(message):
             return
+        async with self._channel_locks[message.channel.id]:
+            await self._process_message_serial(message, source=source)
+
+    async def _process_message_serial(self, message: discord.Message, *, source: str) -> None:
         if await self.state.seen(message.channel.id, message.id):
             return
 
@@ -112,7 +127,8 @@ class CoronetClient(discord.Client):
             LOG.error("Audit unavailable; message left intact (message=%s)", message.id)
             return
 
-        if not message.content.strip():
+        context = await self._moderation_context(message)
+        if not message.content.strip() and context.proposed_title is None:
             if await self._audit(
                 self._judgement_audit(
                     message,
@@ -123,7 +139,7 @@ class CoronetClient(discord.Client):
             return
 
         try:
-            result = await self.moderator.moderate(message.content)
+            result = await self.moderator.moderate(message.content, context=context)
         except ModerationServiceError:
             LOG.exception(
                 "Moderation unavailable; message left intact (guild=%s channel=%s message=%s)",
@@ -143,7 +159,8 @@ class CoronetClient(discord.Client):
             return
 
         channel_name = getattr(message.channel, "name", "unknown")
-        notice = removal_notice(channel_name, message.content, result)
+        original_draft = self._original_draft(message, context)
+        notice = removal_notice(channel_name, original_draft, result)
         decision_audit = self._blocked_audit(message, result, notice)
         if not await self._audit(decision_audit):
             LOG.error(
@@ -200,6 +217,126 @@ class CoronetClient(discord.Client):
             or message.webhook_id is not None
             or (self.audit_channel is not None and message.channel.id == self.audit_channel.id)
         )
+
+    async def _moderation_context(self, message: discord.Message) -> ModerationContext:
+        channel = message.channel
+        channel_name = getattr(channel, "name", "unknown")
+        channel_description = getattr(channel, "topic", None) or ""
+        channel_type = "general_chat"
+        thread_title: str | None = None
+        thread_root: str | None = None
+        proposed_title: str | None = None
+        forum_rules_version: str | None = None
+
+        if isinstance(channel, discord.Thread) and isinstance(channel.parent, discord.ForumChannel):
+            channel_description = channel.parent.topic or ""
+            thread_title = channel.name
+            forum_rules_version = "forum-rules.md (integrated policy)"
+            if message.id == channel.id:
+                channel_type = "forum_post"
+                proposed_title = channel.name
+                thread_root = message.content
+            else:
+                channel_type = "forum_reply"
+                starter = await self._fetch_message(channel, channel.id)
+                thread_root = starter.content if starter is not None else None
+
+        reply_target: str | None = None
+        reference = message.reference
+        if reference is not None and reference.message_id is not None:
+            resolved = reference.resolved
+            if isinstance(resolved, discord.Message):
+                reply_target = resolved.content
+            else:
+                target = await self._fetch_message(channel, reference.message_id)
+                reply_target = target.content if target is not None else None
+
+        recent_messages: list[discord.Message] = []
+        if hasattr(channel, "history"):
+            try:
+                async for previous in channel.history(
+                    limit=15,
+                    before=message,
+                    oldest_first=False,
+                ):
+                    if not previous.author.bot and previous.webhook_id is None:
+                        recent_messages.append(previous)
+            except discord.HTTPException:
+                LOG.warning("Could not fetch context for message %s", message.id)
+        recent_messages.reverse()
+        recent_context = [
+            {
+                "author_id": str(previous.author.id),
+                "message": previous.content,
+            }
+            for previous in recent_messages
+        ]
+        recent_same_author = [
+            previous.content
+            for previous in recent_messages
+            if previous.author.id == message.author.id
+        ]
+        attachments = [
+            {
+                "filename": attachment.filename,
+                "content_type": attachment.content_type,
+                "size": attachment.size,
+                "source_url": attachment.url,
+                "extracted_text": None,
+            }
+            for attachment in message.attachments
+        ]
+
+        return ModerationContext(
+            channel_type=channel_type,
+            channel_name=channel_name,
+            channel_description=channel_description,
+            forum_rules_version=forum_rules_version,
+            thread_title=thread_title,
+            thread_root=thread_root,
+            requested_action=self._requested_action(thread_root),
+            reply_target=reply_target,
+            recent_context=recent_context,
+            recent_same_author=recent_same_author,
+            proposed_title=proposed_title,
+            attachments=attachments,
+            cited_material_accessible=True if attachments else None,
+        )
+
+    @staticmethod
+    def _requested_action(thread_root: str | None) -> str | None:
+        if not thread_root:
+            return None
+        lines = thread_root.splitlines()
+        for index, line in enumerate(lines):
+            if "requested action" not in line.casefold():
+                continue
+            inline = line.split(":", 1)[1].strip() if ":" in line else ""
+            following: list[str] = []
+            for candidate in lines[index + 1 :]:
+                if re.match(r"^\s*(?:#{1,6}\s+|\d+\.\s+)", candidate):
+                    break
+                if candidate.strip():
+                    following.append(candidate.strip())
+            value = " ".join(part for part in [inline, *following] if part)
+            return value or None
+        return None
+
+    @staticmethod
+    async def _fetch_message(
+        channel: discord.abc.Messageable,
+        message_id: int,
+    ) -> discord.Message | None:
+        try:
+            return await channel.fetch_message(message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return None
+
+    @staticmethod
+    def _original_draft(message: discord.Message, context: ModerationContext) -> str:
+        if context.proposed_title is not None:
+            return f"Title: {context.proposed_title}\n\n{message.content}"
+        return message.content
 
     async def _backfill_missed_messages(self, guild: discord.Guild) -> None:
         processed = 0
@@ -306,6 +443,54 @@ class CoronetClient(discord.Client):
         channel_id = interaction.channel_id
         return f"guild `{interaction.guild.id}`, channel `{channel_id}`"
 
+    async def _validation_context(self, interaction: discord.Interaction) -> ModerationContext:
+        channel = interaction.channel
+        if channel is None:
+            return ModerationContext(channel_name="DM")
+
+        channel_name = getattr(channel, "name", "DM") or "DM"
+        channel_description = getattr(channel, "topic", None) or ""
+        channel_type = "general_chat"
+        thread_title: str | None = None
+        thread_root: str | None = None
+        forum_rules_version: str | None = None
+        if isinstance(channel, discord.Thread) and isinstance(channel.parent, discord.ForumChannel):
+            channel_type = "forum_reply"
+            channel_description = channel.parent.topic or ""
+            thread_title = channel.name
+            forum_rules_version = "forum-rules.md (integrated policy)"
+            starter = await self._fetch_message(channel, channel.id)
+            thread_root = starter.content if starter is not None else None
+
+        recent_context: list[dict[str, str]] = []
+        recent_same_author: list[str] = []
+        if hasattr(channel, "history"):
+            try:
+                history = [message async for message in channel.history(limit=15)]
+                history.reverse()
+                for message in history:
+                    if message.author.bot or message.webhook_id is not None:
+                        continue
+                    recent_context.append(
+                        {"author_id": str(message.author.id), "message": message.content}
+                    )
+                    if message.author.id == interaction.user.id:
+                        recent_same_author.append(message.content)
+            except discord.HTTPException:
+                LOG.warning("Could not fetch context for validation by %s", interaction.user.id)
+
+        return ModerationContext(
+            channel_type=channel_type,
+            channel_name=channel_name,
+            channel_description=channel_description,
+            forum_rules_version=forum_rules_version,
+            thread_title=thread_title,
+            thread_root=thread_root,
+            requested_action=self._requested_action(thread_root),
+            recent_context=recent_context,
+            recent_same_author=recent_same_author,
+        )
+
     def _register_commands(self) -> None:
         @self.tree.command(name="validate", description="Validate and refine a draft message")
         @app_commands.describe(text="The draft to validate before posting")
@@ -325,7 +510,8 @@ class CoronetClient(discord.Client):
                 return
 
             try:
-                result = await self.moderator.moderate(text)
+                context = await self._validation_context(interaction)
+                result = await self.moderator.moderate(text, context=context)
                 output = validation_notice(text, result)
                 judgement = "ALLOWED" if result.allowed else f"BLOCKED\n\n{reasons(result)}"
             except ModerationServiceError:

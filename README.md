@@ -18,13 +18,20 @@ commands can also be used in a DM with the bot.
 
 ## Moderation rules
 
-Rules are loaded from [`RULES.md`](RULES.md) at startup. The included rules are the
-inferred initial policy and are intended to be refined incrementally as moderation cases
-provide evidence.
+Rules are loaded from [`RULES.md`](RULES.md) at startup. The operational policy is adapted
+from [`resources/moderation-agent-prompt.md`](resources/moderation-agent-prompt.md) and the
+source [`resources/forum-rules.md`](resources/forum-rules.md); those artifacts are policy
+inputs rather than runtime prompts that must be copied verbatim.
 
 The model must return a structured decision. CoronetBot validates that every cited quote
-is an exact substring of the original message and that blocked decisions include both a
-violation and a suggested revision. Invalid responses fail open.
+is an exact substring of the proposed title/body and that blocked decisions include both
+a violation and a suggested revision. Invalid responses fail open.
+
+Reviews include the channel type/name/description, forum title and root post, reply target,
+recent context, recent same-author messages, and attachment metadata when available. This
+lets the policy distinguish general chat, original `C:`/`Q:` forum posts, and scoped forum
+replies without treating quoted/contextual text as if the author wrote it. Attachment
+contents are not inferred when no extracted text is available.
 
 ## Local setup
 
