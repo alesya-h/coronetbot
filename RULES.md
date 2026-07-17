@@ -290,15 +290,21 @@ A normative claim is allowed when its factual basis and value or policy principl
 
 #### B2. Question post
 
-The title must begin `Q:` and contain one genuine, neutrally framed question.
+The title must begin `Q:` and be no more than 100 characters including the prefix. It may contain the complete question or a faithful shortened/simplified version when the complete question does not fit. The complete question may instead be stated in the body; do not require the body to duplicate a question already fully stated in the title.
 
-The body must state:
+Read the title, body, and directly supplied images together. The post as a whole must contain one genuine, neutrally framed, reasonably answerable inquiry. A body is optional when the title is self-contained. The author may add context, subject details, relevant images, or an explanation of what information might answer the question, but none is a mandatory section. Labels such as `What I am trying to understand:`, `Subject:`, and `What would answer it:` are optional.
 
-1. **What I am trying to understand** — one question only.
-2. **Subject** — the specific document, decision, meeting, figure, contract term, process, or event.
-3. **What would answer it** — the information, record, explanation, calculation, or source needed.
+Do not require an author to know or prescribe the record, source, explanation, or calculation that would answer their question. Closely connected subquestions may form one coherent inquiry when they can reasonably be answered together. Minor ambiguity that participants can resolve with a narrow follow-up question is not a reason to reject the post.
 
-Return for editing if the question embeds an allegation, contains several questions, asks someone to prove innocence, demands speculation about motive, or is so broad that it cannot reach a logical end.
+Return for editing only if:
+
+- the actual question cannot be determined from the title and body together;
+- it combines unrelated or unmanageably broad inquiries;
+- it embeds an unsupported allegation or materially false or loaded premise;
+- it asks someone to prove innocence;
+- it demands speculation about motive;
+- it is so materially ambiguous that no meaningful answer is possible; or
+- it violates a universal rule.
 
 ### C. Forum reply/comment
 
