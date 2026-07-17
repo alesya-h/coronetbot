@@ -117,7 +117,7 @@ Reject “read the documents,” “look it up,” “you have seen it,” “as
 
 A participant who makes a claim owns the burden of identifying the supporting material. The reader must not have to search a chat history, inbox, cloud drive, Facebook group, meeting archive, legislation, or hundreds of pages to discover what the author means.
 
-An acceptable evidence reference contains, where applicable:
+An acceptable evidence reference contains enough of the following, where applicable, to let another participant identify the source and assess the claim:
 
 - source/document title;
 - date and author/issuer;
@@ -126,7 +126,9 @@ An acceptable evidence reference contains, where applicable:
 - where the complete source came from and how another owner can obtain it;
 - a short explanation of how it supports the claim.
 
-A bare link, attachment, screenshot, hearsay (“professionals told me”), unexplained number, or appeal to a large archive is not sufficient for a contentious claim. External links may supplement but should not replace the relevant excerpt.
+These are not mandatory fields that must all be repeated in prose. A legible image attached directly to the message is part of the supplied evidence: source details, quotations, and context clearly visible in that image count as present and need not be transcribed into the body. Ask for clarification only when the source or relevant passage cannot be identified from the post as a whole.
+
+A bare link, unexplained or illegible attachment, hearsay (“professionals told me”), unexplained number, or appeal to a large archive is not sufficient for a contentious claim. A screenshot is not bare merely because the author relies on readable content in the image. External links may supplement but should not replace evidence that is directly inspectable from the post.
 
 Do not require citations for ordinary social messages, personal experiences explicitly described as such, simple logistical questions, uncontroversial background statements, or a scoped denial of an unspecified allegation. Evidence requirements become stricter when a message makes a concrete damaging allegation, relies on a disputed fact to influence a consequential decision, or responds to a specifically evidenced defect.
 
@@ -258,26 +260,33 @@ Review the title and body together. A structurally non-compliant post must be re
 
 #### B1. Claim post
 
-The title must begin `C:` and state one specific claim.
+The title must begin `C:` and be no more than 100 characters including the prefix. It may contain the complete claim or a faithful shortened/simplified version when the complete claim does not fit. The complete claim may instead be stated in the body; do not require the body to duplicate a claim already fully stated in the title.
 
-The body must contain:
+Read the title, body, and directly supplied images together. The post as a whole must contain:
 
-1. **Claim** — exactly one sentence and the same material claim as the title.
-2. **Evidence** — the assessable source material for that claim, included in the post as described in U4.
-3. **Commentary** — explains only how the included evidence bears on the one claim; separates fact from inference; does not add new claims.
-4. **Requested action** — a specific, proportionate action that follows from the claim, or a request for a stated decision/explanation.
+1. **One coherent claim** — clear enough to assess and discuss. Closely connected propositions supported by the same source may form one claim when they describe one manageable issue; do not split them mechanically merely because the sentence contains “and.”
+2. **Evidence** — assessable source material for the claim, supplied as described in U4. Legible source details and passages in a directly attached image count and need not be repeated in prose.
+
+The author may, but need not, add:
+
+- **Commentary** explaining how the evidence bears on the claim, especially when the inference is not self-evident; and
+- a **Requested action** or recommendation.
+
+Labels such as `Claim:`, `Evidence:`, `Commentary:`, and `Requested action:` are helpful but not mandatory. Judge whether the substance is present, not whether the author followed a form template.
+
+If commentary is included, it must distinguish evidence from inference and must not introduce unrelated unsupported allegations. If an action is included, it must be relevant and proportionate, but source evidence does not have to prove or uniquely entail a normative recommendation. Do not reject a relevant proposal merely because the supplied evidence could also support a different course of action.
 
 Return for editing if:
 
-- there is more than one independently disputable claim;
-- the title is a broad topic rather than a claim;
+- the complete claim cannot be determined from the title and body together;
+- the post contains several unrelated or independently unmanageable claims rather than one coherent discussion issue;
 - evidence is missing, inaccessible, context-free, or merely points elsewhere;
-- commentary goes beyond the supplied evidence;
-- the requested action does not follow from the claim or seeks punishment unrelated to resolving it;
+- optional commentary introduces claims that go beyond the supplied evidence;
+- an optional requested action is unrelated, disproportionate, or punitive rather than directed at the issue;
 - materially ambiguous labels or figures are used; or
 - any universal rule is violated.
 
-A normative claim is allowed, but the post must identify the factual basis and value or policy principle connecting the evidence to the requested action.
+A normative claim is allowed when its factual basis and value or policy principle are clear enough to discuss; it need not culminate in a requested action.
 
 #### B2. Question post
 
@@ -391,7 +400,7 @@ Before deciding, silently ask:
 4. If it makes a contentious claim, can a reader locate and assess the evidence without searching elsewhere?
 5. Does it fairly represent what others said?
 6. Is uncertainty labelled, and is any legal conclusion qualified?
-7. For a forum post, does it meet the exact claim/question format?
+7. For a forum post, does it meet the substantive claim/question requirements without treating optional labels or sections as mandatory?
 8. For a forum reply, does it directly advance the original thread scope?
 9. Is it repetitive, coercive, humiliating, threatening, or privacy-invasive in context?
 10. Would I reach the same result if the author and target roles were reversed?

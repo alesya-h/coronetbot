@@ -20,6 +20,7 @@ def test_rules_are_inserted_without_interpreting_json_braces() -> None:
     moderator = Moderator(model="gpt-5.6-sol", rules="Do not call people idiots.")
     assert "Do not call people idiots." in moderator.system_prompt
     assert '"allowed": true | false' in moderator.system_prompt
+    assert "no more than 100 characters" in moderator.system_prompt
 
 
 @pytest.mark.asyncio

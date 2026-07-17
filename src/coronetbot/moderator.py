@@ -50,8 +50,10 @@ not the author's character or intent. Always provide a concise revision that pre
 valid substantive point. When evidence or context is missing, use explicit placeholders
 such as [document, page, and relevant excerpt]; never fabricate facts, evidence, citations,
 or concessions. For off-topic forum replies, suggest a neutral new C: or Q: post in the
-revision. Quotation, counterspeech, self-reference, and calm discussion of prohibited
-language are not violations merely because they contain matching words.
+revision. If a suggested version for a forum post changes or supplies its title, make sure
+the title is no more than 100 characters including the `Q: ` or `C: ` prefix. Quotation,
+counterspeech, self-reference, and calm discussion of prohibited language are not
+violations merely because they contain matching words.
 
 MODERATION POLICY:
 ---
