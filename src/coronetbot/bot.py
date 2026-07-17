@@ -20,6 +20,7 @@ from .state import StateStore
 
 LOG = logging.getLogger(__name__)
 AUDIT_CHANNEL_NAME = "bot-moderation-audit"
+IGNORED_CATEGORY_IDS = {1491596963647324180}  # Committee internal
 
 
 class CoronetClient(discord.Client):
@@ -124,7 +125,7 @@ class CoronetClient(discord.Client):
         await self._process_thread_title(after, source="thread_rename")
 
     async def _process_thread_title(self, thread: discord.Thread, *, source: str) -> bool:
-        if thread.guild.id != self.config.guild_id:
+        if thread.guild.id != self.config.guild_id or self._channel_is_ignored(thread):
             return False
         async with self._channel_locks[thread.id]:
             if await self.state.thread_title_seen(thread.id, thread.name):
@@ -351,8 +352,21 @@ class CoronetClient(discord.Client):
             or message.guild.id != self.config.guild_id
             or message.author.bot
             or message.webhook_id is not None
+            or self._channel_is_ignored(message.channel)
             or (self.audit_channel is not None and message.channel.id == self.audit_channel.id)
         )
+
+    @staticmethod
+    def _channel_category_id(channel: object) -> int | None:
+        category_id = getattr(channel, "category_id", None)
+        if category_id is not None:
+            return category_id
+        parent = getattr(channel, "parent", None)
+        return getattr(parent, "category_id", None)
+
+    @classmethod
+    def _channel_is_ignored(cls, channel: object) -> bool:
+        return cls._channel_category_id(channel) in IGNORED_CATEGORY_IDS
 
     async def _moderation_context(self, message: discord.Message) -> ModerationContext:
         channel = message.channel
@@ -523,6 +537,8 @@ class CoronetClient(discord.Client):
         self, guild: discord.Guild
     ) -> AsyncIterator[discord.abc.Messageable]:
         for channel in guild.text_channels:
+            if self._channel_is_ignored(channel):
+                continue
             if self.audit_channel is not None and channel.id == self.audit_channel.id:
                 continue
             permissions = channel.permissions_for(guild.me)
@@ -532,6 +548,8 @@ class CoronetClient(discord.Client):
         # Active public/private threads are enough for normal restart gaps. Older archived
         # threads require channel-specific archive scans and can be added if needed.
         for thread in guild.threads:
+            if self._channel_is_ignored(thread):
+                continue
             if self.audit_channel is not None and thread.id == self.audit_channel.id:
                 continue
             permissions = thread.permissions_for(guild.me)

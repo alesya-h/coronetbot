@@ -157,6 +157,9 @@ rules or environment variables.
   Access to `#bot-moderation-audit` should therefore be tightly restricted.
 - The bot never moderates `#bot-moderation-audit` itself, bot messages, or webhooks; this prevents
   recursive audit loops.
+- The entire **Committee internal** category (`1491596963647324180`) is excluded from
+  message, thread-title, and startup-backfill moderation. Audit output still works when the
+  audit channel is located inside that category.
 - If the initial audit record or a blocked judgement cannot be written, moderation fails
   open and the source message is not deleted. Successfully processed messages advance a
   per-channel cursor so restarts can backfill visible messages that arrived while the bot
