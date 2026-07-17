@@ -9,3 +9,4 @@ __pycache__/
 *.py[cod]
 dist/
 .env.prod
+/DEPLOYMENT.md
