@@ -1,15 +1,14 @@
-Let's try this to have a little better way to discuss our hot topics.
-Title: "Q: your question", "C: your claim". Forum titles have a 100-character limit, including the "Q: " or "C: " prefix. The title may contain the complete question/claim or a faithful shortened version, with the complete version in the body.
+Title: "Q: your question", "C: your claim". Discord has a 100-character title limit, so a shortened title is fine if the complete question/claim is in the body.
 
-To keep things organised, each claim post must contain:
-1. One coherent claim - stated either completely in the title or in the body. You do not need to repeat a claim that is already fully stated in the title, and labels such as "Claim:" are helpful but not mandatory. Closely connected points supported by the same evidence can form one claim when they make up one manageable issue. If you have separate or unrelated concerns/points, please create separate posts.
-2. Evidence - must be in the post for everyone to assess. If the evidence is an email, please attach a legible screenshot with enough source details and surrounding context to identify it and avoid misleading quotation. If the evidence is a document, please identify it well enough to distinguish the relevant version (so we can e.g. know that honorarium was mentioned in the version sent over emails) and include the relevant page/section or screenshot. Details clearly visible in an attached image count as provided and do not have to be repeated in the body. A new owner should be able to assess the claim from the post and understand how to locate the complete source.
+To keep things organised, each claim post must provide:
+1. One coherent claim, stated fully in the title or body. Do not repeat a claim already clear from the title. Labels such as "Claim:" are helpful but optional. Closely connected points supported by the same evidence may stay together; please separate unrelated concerns.
+2. Evidence everyone can assess. For an email, attach a legible screenshot with enough source details and context. For a document, identify the relevant version and include the page/section or a screenshot. Visible image details count and need not be repeated. A new owner should be able to assess the claim and locate the complete source.
 
-You may also include commentary explaining how the evidence supports the claim, particularly when the connection is not obvious, but commentary is not mandatory. If included, it should distinguish the evidence from your inference and stay focused on that evidence.
+Commentary explaining how the evidence supports the claim is optional. If included, distinguish evidence from inference and stay focused on that evidence.
 
-A requested action or recommendation is optional. If included, it should be relevant and proportionate to the issue. The evidence does not have to prove that your recommendation is the only possible course of action.
+A requested action or recommendation is optional. If included, it should be relevant and proportionate; the evidence need not prove it is the only possible course.
 
-Alternatively, if you only want to understand/clarify something for yourself and are seeking explanations and evidence, you may create a post with a question. The complete question may be in the title or the body, and the body is optional when the title is self-contained. You may add context, identify the document/decision/meeting/figure/process, or say what information might answer the question, but these are not mandatory sections and you do not need to know the source that would answer it. Closely connected subquestions that can reasonably be answered together may be kept in one post; please create separate posts for unrelated or unmanageably broad questions.
+For a question post, put the complete question in the title or body; the body is optional when the title is clear. Context, subject details, images, and ideas about what might answer it are optional. You do not need to know the source that would answer your question. Closely connected subquestions may stay together; please separate unrelated or unmanageably broad questions.
 
 When you are writing your post (regardless of whether it's a claim or a question), please be specific and especially careful with the following things that we've seen frequently conflated:
 1. current committee *vs* any previous committee. GOOD: "the committee before the last AGM", "the committee at the time of the new BM company selection", "current committee". BAD: "the committee"
