@@ -40,6 +40,29 @@ def removal_notice(channel: str, original: str, result: ModerationResult) -> str
     )
 
 
+def edited_message_public_notice(author: str, approved_version: str) -> str:
+    return (
+        f"A post from **{author}** was deleted because its author edited it and the edited "
+        "version did not comply with the community standards.\n\n"
+        f"**Original post before the edit:**\n{quote(approved_version)}"
+    )
+
+
+def thread_deletion_participant_notice(messages: list[str]) -> str:
+    label = "message" if len(messages) == 1 else "messages"
+    verb = "has" if len(messages) == 1 else "have"
+    preserved = "\n\n".join(
+        f"**Your {label if len(messages) == 1 else f'message {index}'}:**\n{quote(message)}"
+        for index, message in enumerate(messages, start=1)
+    )
+    return (
+        "The original author of a thread you posted in edited its title into a version that "
+        "does not comply with the community guidelines, regrettably triggering deletion "
+        f"of the thread you posted in. Your {label} {verb} been preserved below.\n\n"
+        f"{preserved}"
+    )
+
+
 def validation_notice(original: str, result: ModerationResult) -> str:
     if result.allowed:
         return "✅ This draft passes the current moderation rules."

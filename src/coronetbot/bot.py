@@ -5,6 +5,7 @@ import logging
 import re
 from collections import defaultdict
 from collections.abc import AsyncIterator, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,10 +16,18 @@ from discord import app_commands
 
 from . import __version__
 from .config import Config
-from .formatting import chunks, quote, reasons, removal_notice, validation_notice
+from .formatting import (
+    chunks,
+    edited_message_public_notice,
+    quote,
+    reasons,
+    removal_notice,
+    thread_deletion_participant_notice,
+    validation_notice,
+)
 from .models import ModerationResult
 from .moderator import ModerationContext, ModerationImage, ModerationServiceError, Moderator
-from .state import StateStore
+from .state import ApprovedMessage, StateStore
 
 LOG = logging.getLogger(__name__)
 AUDIT_CHANNEL_NAME = "bot-moderation-audit"
@@ -143,6 +152,35 @@ class CoronetClient(discord.Client):
         await self._backfill_complete.wait()
         await self._process_message(message, source="live")
 
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        if "content" not in payload.data and "attachments" not in payload.data:
+            return
+        if payload.guild_id != self.config.guild_id:
+            return
+        await self._backfill_complete.wait()
+
+        channel = self.get_channel(payload.channel_id)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(payload.channel_id)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                return
+        if self._channel_is_ignored(channel):
+            return
+        if self.audit_channel is not None and channel.id == self.audit_channel.id:
+            return
+
+        after = await self._fetch_message(channel, payload.message_id)
+        if after is None or not self._message_in_scope(after):
+            return
+
+        approved = await self.state.approved_message(after.id)
+        cached = payload.cached_message
+        if approved is None and cached is not None and cached.author.id == after.author.id:
+            approved = self._approved_from_message(cached)
+        async with self._channel_locks[after.channel.id]:
+            await self._process_message_edit(after, approved)
+
     async def on_thread_create(self, thread: discord.Thread) -> None:
         await self._backfill_complete.wait()
         await self._process_thread_title(thread, source="thread_create")
@@ -159,6 +197,9 @@ class CoronetClient(discord.Client):
         async with self._channel_locks[thread.id]:
             if await self.state.thread_title_seen(thread.id, thread.name):
                 return False
+            is_title_edit = source == "thread_rename" or await self.state.has_thread_title(
+                thread.id
+            )
 
             starter = await self._fetch_message(thread, thread.id)
             if starter is None:
@@ -231,15 +272,40 @@ class CoronetClient(discord.Client):
                     "ALLOWED — no rules violated.\nBot response: None."
                 ):
                     await self.state.mark_thread_title(thread.id, thread.name)
+                    if starter is not None:
+                        await self.state.mark_processed(
+                            thread.id,
+                            starter.id,
+                            approved=self._approved_from_message(starter),
+                        )
                 return False
 
             notice = removal_notice(parent_name, original_draft, result)
+            participant_notices: list[tuple[discord.abc.User, str]] = []
+            if is_title_edit:
+                collected = await self._thread_participant_notices(thread)
+                if collected is None:
+                    await self._audit(
+                        f"**Thread-title judgement** — thread `{thread.id}`\n"
+                        "ERROR — blocked title edit, but participant messages could not be "
+                        "preserved; failed open."
+                    )
+                    return False
+                participant_notices = collected
+
             if not await self._audit(
                 f"**Thread-title judgement** — thread `{thread.id}`\n"
                 f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
                 f"**Bot response (removal DM)**\n{quote(notice)}"
             ):
                 return False
+            for participant, participant_notice in participant_notices:
+                if not await self._audit(
+                    f"**Thread-deletion participant notification** — thread `{thread.id}`\n"
+                    f"Recipient: `{participant}` (`{participant.id}`)\n\n"
+                    f"**Bot response (DM)**\n{quote(participant_notice)}"
+                ):
+                    return False
 
             dm_status = "not sent; author unavailable"
             if author is not None:
@@ -250,11 +316,27 @@ class CoronetClient(discord.Client):
                 except discord.HTTPException:
                     dm_status = "failed"
 
+            participant_dm_sent = 0
+            for participant, participant_notice in participant_notices:
+                try:
+                    for part in chunks(participant_notice):
+                        await participant.send(
+                            part, allowed_mentions=discord.AllowedMentions.none()
+                        )
+                    participant_dm_sent += 1
+                except discord.HTTPException:
+                    LOG.warning(
+                        "Could not preserve messages for thread participant (thread=%s user=%s)",
+                        thread.id,
+                        participant.id,
+                    )
+
             delete_status = "thread deleted"
             deleted = False
             try:
                 await thread.delete(reason="CoronetBot moderation decision")
                 deleted = True
+                await self.state.remove_channel_approved(thread.id)
                 LOG.info(
                     "Deleted rule-breaking thread title (guild=%s thread=%s owner=%s rules=%s)",
                     thread.guild.id,
@@ -268,7 +350,10 @@ class CoronetClient(discord.Client):
 
             if await self._audit(
                 f"**Thread-title actions** — thread `{thread.id}`\n"
-                f"DM delivery: **{dm_status}**\nDeletion: **{delete_status}**"
+                f"Owner DM delivery: **{dm_status}**\n"
+                f"Participant preservation DMs: **{participant_dm_sent}/"
+                f"{len(participant_notices)} sent**\n"
+                f"Deletion: **{delete_status}**"
             ):
                 await self.state.mark_thread_title(thread.id, thread.name)
                 if starter is not None and starter.id == thread.id:
@@ -317,7 +402,11 @@ class CoronetClient(discord.Client):
                     "were logged but not analysed.",
                 )
             ):
-                await self.state.mark_processed(message.channel.id, message.id)
+                await self.state.mark_processed(
+                    message.channel.id,
+                    message.id,
+                    approved=self._approved_from_message(message),
+                )
             return
 
         try:
@@ -339,7 +428,11 @@ class CoronetClient(discord.Client):
 
         if result.allowed:
             if await self._audit(self._judgement_audit(message, "ALLOWED — no rules violated.")):
-                await self.state.mark_processed(message.channel.id, message.id)
+                await self.state.mark_processed(
+                    message.channel.id,
+                    message.id,
+                    approved=self._approved_from_message(message),
+                )
             return
 
         channel_name = getattr(message.channel, "name", "unknown")
@@ -402,6 +495,170 @@ class CoronetClient(discord.Client):
             f"DM delivery: **{dm_status}**\nDeletion: **{delete_status}**"
         ):
             await self.state.mark_processed(message.channel.id, message.id)
+
+    async def _process_message_edit(
+        self,
+        message: discord.Message,
+        approved: ApprovedMessage | None,
+    ) -> None:
+        current = self._approved_from_message(message)
+        if approved == current:
+            return
+        if approved is not None and (
+            approved.channel_id != message.channel.id or approved.author_id != message.author.id
+        ):
+            approved = None
+
+        if not await self._audit(self._edit_received_audit(message, approved)):
+            LOG.error("Audit unavailable; edited message left intact (message=%s)", message.id)
+            return
+
+        context, prepared = await self._moderation_context(message)
+        if prepared.metadata and not await self._audit(
+            self._attachment_analysis_audit("edited message", message.id, prepared)
+        ):
+            return
+        if prepared.unavailable_images:
+            await self._audit(
+                self._judgement_audit(
+                    message,
+                    "ERROR — an edited image attachment could not be analysed; failed open.",
+                )
+            )
+            return
+
+        try:
+            result = await self.moderator.moderate(
+                message.content, context=context, images=prepared.images
+            )
+        except ModerationServiceError:
+            LOG.exception("Edit moderation unavailable; message left intact (%s)", message.id)
+            await self._audit(
+                self._judgement_audit(message, "ERROR — classifier unavailable; failed open.")
+            )
+            return
+
+        if result.allowed:
+            if await self._audit(
+                self._judgement_audit(message, "ALLOWED EDIT — no rules violated.")
+            ):
+                await self.state.mark_approved(current)
+            return
+
+        if approved is None:
+            await self._audit(
+                self._judgement_audit(
+                    message,
+                    "ERROR — edited version was blocked, but the approved pre-edit version "
+                    "was unavailable; failed open.",
+                )
+            )
+            return
+
+        is_latest = await self._message_is_latest(message)
+        if is_latest is None:
+            await self._audit(
+                self._judgement_audit(
+                    message,
+                    "ERROR — edited version was blocked, but message position could not be "
+                    "determined; failed open.",
+                )
+            )
+            return
+
+        channel_name = getattr(message.channel, "name", "unknown")
+        edited_draft = self._original_draft(message, context)
+        approved_draft = self._approved_draft(approved, message.channel)
+        removal = removal_notice(channel_name, edited_draft, result)
+        public_notice = None
+        if not is_latest:
+            author_name = discord.utils.escape_markdown(message.author.display_name)
+            public_notice = edited_message_public_notice(author_name, approved_draft)
+        decision = (
+            f"**Edit moderation judgement** — message `{message.id}`\n"
+            f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
+            f"**Bot response (removal DM)**\n{quote(removal)}"
+        )
+        if public_notice is not None:
+            decision += f"\n\n**Bot response (public continuity notice)**\n{quote(public_notice)}"
+        if not await self._audit(decision):
+            return
+
+        public_messages: list[discord.Message] = []
+        if public_notice is not None:
+            sent = await self._send_public_notice(message.channel, public_notice)
+            if sent is None:
+                await self._audit(
+                    f"**Edit moderation actions** — message `{message.id}`\n"
+                    "Public continuity notice: **failed**\nDeletion: **not attempted; failed open**"
+                )
+                return
+            public_messages = sent
+
+        dm_status = "sent"
+        try:
+            for part in chunks(removal):
+                await message.author.send(part, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            dm_status = "failed"
+
+        delete_status = "message deleted"
+        public_status = "sent" if public_notice else "not needed"
+        try:
+            # A body edit to a starter deletes only the starter message. Title edits are
+            # handled separately by on_thread_update and delete the whole container.
+            await message.delete()
+            await self.state.remove_approved(message.id)
+            LOG.info(
+                "Deleted rule-breaking edited message (guild=%s channel=%s message=%s user=%s)",
+                message.guild.id,
+                message.channel.id,
+                message.id,
+                message.author.id,
+            )
+        except discord.HTTPException:
+            delete_status = "message deletion failed; message retained"
+            public_status = "rolled back" if public_notice else "not needed"
+            for sent_message in public_messages:
+                with suppress(discord.HTTPException):
+                    await sent_message.delete()
+
+        await self._audit(
+            f"**Edit moderation actions** — message `{message.id}`\n"
+            f"DM delivery: **{dm_status}**\n"
+            f"Public continuity notice: **{public_status}**\n"
+            f"Deletion: **{delete_status}**"
+        )
+
+    async def _message_is_latest(self, message: discord.Message) -> bool | None:
+        channel = message.channel
+        if not hasattr(channel, "history"):
+            return None
+        try:
+            latest = await anext(channel.history(limit=1, oldest_first=False), None)
+        except discord.HTTPException:
+            return None
+        if latest is None and isinstance(channel, discord.Thread) and message.id == channel.id:
+            return True
+        return latest is not None and latest.id == message.id
+
+    async def _send_public_notice(
+        self,
+        channel: discord.abc.Messageable,
+        text: str,
+    ) -> list[discord.Message] | None:
+        sent: list[discord.Message] = []
+        try:
+            for part in chunks(text):
+                sent.append(
+                    await channel.send(part, allowed_mentions=discord.AllowedMentions.none())
+                )
+            return sent
+        except discord.HTTPException:
+            for message in sent:
+                with suppress(discord.HTTPException):
+                    await message.delete()
+            return None
 
     def _message_in_scope(self, message: discord.Message) -> bool:
         return not (
@@ -598,6 +855,31 @@ class CoronetClient(discord.Client):
             return value or None
         return None
 
+    async def _thread_participant_notices(
+        self,
+        thread: discord.Thread,
+    ) -> list[tuple[discord.abc.User, str]] | None:
+        by_author: dict[int, tuple[discord.abc.User, list[str]]] = {}
+        try:
+            async for message in thread.history(limit=None, oldest_first=True):
+                if (
+                    message.id == thread.id
+                    or message.author.bot
+                    or message.webhook_id is not None
+                    or message.author.id == thread.owner_id
+                ):
+                    continue
+                entry = by_author.setdefault(message.author.id, (message.author, []))
+                entry[1].append(self._draft_with_attachments(message.content, message.attachments))
+        except (discord.Forbidden, discord.HTTPException):
+            LOG.exception("Could not preserve participant messages for thread %s", thread.id)
+            return None
+
+        return [
+            (author, thread_deletion_participant_notice(messages))
+            for author, messages in by_author.values()
+        ]
+
     @staticmethod
     async def _fetch_message(
         channel: discord.abc.Messageable,
@@ -607,6 +889,64 @@ class CoronetClient(discord.Client):
             return await channel.fetch_message(message_id)
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return None
+
+    @staticmethod
+    def _approved_from_message(message: discord.Message) -> ApprovedMessage:
+        return ApprovedMessage(
+            message_id=message.id,
+            channel_id=message.channel.id,
+            author_id=message.author.id,
+            content=message.content,
+            attachment_ids=tuple(attachment.id for attachment in message.attachments),
+            attachment_names=tuple(attachment.filename for attachment in message.attachments),
+        )
+
+    @classmethod
+    def _approved_draft(
+        cls,
+        approved: ApprovedMessage,
+        channel: discord.abc.Messageable,
+    ) -> str:
+        text = approved.content
+        if isinstance(channel, discord.Thread) and approved.message_id == channel.id:
+            text = f"Title: {channel.name}" + (f"\n\n{text}" if text else "")
+        if approved.attachment_names:
+            names = "\n".join(f"- {name}" for name in approved.attachment_names)
+            prefix = f"{text}\n\n" if text else ""
+            text = f"{prefix}Attachments:\n{names}"
+        return text
+
+    def _edit_received_audit(
+        self,
+        message: discord.Message,
+        approved: ApprovedMessage | None,
+    ) -> str:
+        approved_draft = (
+            self._approved_draft(approved, message.channel)
+            if approved is not None
+            else "_(approved pre-edit version unavailable)_"
+        )
+        current = self._original_draft(
+            message,
+            ModerationContext(
+                proposed_title=(
+                    message.channel.name
+                    if isinstance(message.channel, discord.Thread)
+                    and message.id == message.channel.id
+                    else None
+                )
+            ),
+        )
+        return (
+            f"**Message edit received**\n"
+            f"Message: `{message.id}` · [jump]({message.jump_url})\n"
+            f"Author: `{message.author}` (`{message.author.id}`)\n"
+            f"Channel: `{message.channel.id}`\n\n"
+            f"**Approved pre-edit version**\n{quote(approved_draft)}\n\n"
+            f"**Edited version**\n{quote(current)}\n\n"
+            f"**Current attachments**\n"
+            f"{self._attachments_audit_listing(message.attachments)}"
+        )
 
     @staticmethod
     def _draft_with_attachments(text: str, attachments: Sequence[discord.Attachment]) -> str:

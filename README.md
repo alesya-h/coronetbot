@@ -2,9 +2,9 @@
 
 LLM-based moderation bot for the Coronet strata Discord community.
 
-For each new message, reply, thread message, or forum post in the server, the bot checks
-text and supported image attachments against the configured rules. Allowed messages are
-left untouched. For a clear violation,
+For each new or edited message, reply, thread message, or forum post in the server, the
+bot checks text and supported image attachments against the configured rules. Allowed
+messages are left untouched. For a clear violation,
 the bot DMs the author with the original draft, reasons, and a suggested revision, then
 deletes the public message. If classification or audit logging fails, the bot leaves the
 message in place.
@@ -120,8 +120,11 @@ Calls are bounded by a concurrency semaphore. Authentication/refresh operations 
 serialized, while API requests use independent clients and may run concurrently. Keep
 concurrency conservative because ChatGPT subscription limits differ from API limits.
 
-The bot stores the highest processed message ID per channel and a hash of each reviewed
-thread title in `CB_STATE_PATH`. On startup it fetches and processes visible messages newer
+The bot stores the highest processed message ID per channel, a hash of each reviewed
+thread title, and up to 5,000 recent approved message versions in `CB_STATE_PATH`. Approved
+versions contain message text and attachment IDs/names so later edits can be compared and
+the pre-edit version can be preserved. Protect this state file as private moderation data.
+On startup it fetches and processes visible messages newer
 than that cursor and reviews active titles that are new or renamed. For channels with no
 cursor yet, it processes visible recent history up to `CB_BACKFILL_LOOKBACK_SECONDS` old;
 set this to `0` before a first production launch if you want to start from a clean
@@ -155,8 +158,8 @@ rules or environment variables.
 
 ## Audit retention and operational behaviour
 
-- Every in-scope user message is copied to `#bot-moderation-audit` with its author, location,
-  attachments, moderation judgement, bot response, and action outcome. `/validate`,
+- Every in-scope user message and message edit is copied to `#bot-moderation-audit` with
+  its author, location, attachments, moderation judgement, bot response, and action outcome. `/validate`,
   `/rules`, and `/help` inputs/responses are also audited.
 - Audit records are retained by Discord according to the server's retention practices.
   Access to `#bot-moderation-audit` should therefore be tightly restricted.
@@ -169,6 +172,10 @@ rules or environment variables.
   open and the source message is not deleted. Successfully processed messages advance a
   per-channel cursor so restarts can backfill visible messages that arrived while the bot
   was offline.
+- A blocked edit to the latest message is removed and returned to its author privately. If
+  later messages exist, the bot also posts a continuity notice containing the approved
+  pre-edit version. A blocked starter-body edit removes only the starter message. A blocked
+  thread-title edit deletes the thread and DMs other participants copies of their messages.
 - Message text and active rules are also sent through the ChatGPT Codex subscription
   provider. Confirm its current retention/privacy policy before production use.
 - Discord and the LLM provider may independently retain data; deleting a public Discord
