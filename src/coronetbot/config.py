@@ -41,6 +41,8 @@ class Config:
     llm_retries: int
     state_path: Path
     backfill_lookback_seconds: int
+    max_images_per_message: int
+    max_image_bytes: int
 
     @classmethod
     def from_env(cls) -> Config:
@@ -87,4 +89,6 @@ class Config:
             llm_retries=_integer("CB_LLM_RETRIES", 2, minimum=0),
             state_path=state_path,
             backfill_lookback_seconds=_integer("CB_BACKFILL_LOOKBACK_SECONDS", 3600, 0),
+            max_images_per_message=_integer("CB_MAX_IMAGES_PER_MESSAGE", 4),
+            max_image_bytes=_integer("CB_MAX_IMAGE_BYTES", 8_000_000),
         )

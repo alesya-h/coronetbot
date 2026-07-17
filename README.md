@@ -2,15 +2,16 @@
 
 LLM-based moderation bot for the Coronet strata Discord community.
 
-For each new text message, reply, thread message, or forum post in the server, the bot
-checks the configured rules. Allowed messages are left untouched. For a clear violation,
+For each new message, reply, thread message, or forum post in the server, the bot checks
+text and supported image attachments against the configured rules. Allowed messages are
+left untouched. For a clear violation,
 the bot DMs the author with the original draft, reasons, and a suggested revision, then
 deletes the public message. If classification or audit logging fails, the bot leaves the
 message in place.
 
 ## Commands
 
-- `/validate text` — privately validate and refine a draft before posting
+- `/validate [text] [image]` — privately validate and refine draft text, an image, or both
 - `/rules` — show the active moderation rules
 - `/help` — show commands, version, model, and configuration
 
@@ -32,8 +33,10 @@ a violation and a suggested revision. An invalid response leaves the message in 
 Reviews include the channel type/name/description, forum title and root post, reply target,
 recent context, recent same-author messages, and attachment metadata when available. This
 lets the policy distinguish general chat, original `C:`/`Q:` forum posts, and scoped forum
-replies without treating quoted/contextual text as if the author wrote it. Attachment
-contents are not inferred when no extracted text is available.
+replies without treating quoted/contextual text as if the author wrote it. Supported image
+attachments are downloaded from Discord, signature-checked, and sent as ephemeral
+multimodal inputs so visible text and imagery can be assessed. Other attachment contents
+are not inferred when no extracted text is available.
 
 ## Local setup
 
@@ -109,6 +112,8 @@ Codex CLI, Node.js, or per-message subprocess in the runtime.
 | `CB_LLM_RETRIES` | no | `2` |
 | `CB_STATE_PATH` | no | `.coronetbot-state.json` |
 | `CB_BACKFILL_LOOKBACK_SECONDS` | no | `3600` |
+| `CB_MAX_IMAGES_PER_MESSAGE` | no | `4` |
+| `CB_MAX_IMAGE_BYTES` | no | `8000000` |
 | `CB_CODEX_HOME` | no | `~/.codex` |
 
 Calls are bounded by a concurrency semaphore. Authentication/refresh operations are
@@ -168,8 +173,10 @@ rules or environment variables.
   provider. Confirm its current retention/privacy policy before production use.
 - Discord and the LLM provider may independently retain data; deleting a public Discord
   message is not erasure from `#bot-moderation-audit` or provider systems.
-- Attachment metadata and URLs are audited, but file contents are not downloaded or sent
-  to the model. Attachment-only messages are not classified.
+- PNG, JPEG, GIF, and WebP attachments are downloaded and sent to the model up to the
+  configured count and per-image byte limits. Image-only messages are classified. If an
+  apparent image cannot be downloaded or safely recognized, moderation fails open and the
+  message remains. Non-image attachment contents are not downloaded or analysed.
 
 ## Behaviour
 

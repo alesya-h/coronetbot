@@ -20,6 +20,8 @@ def test_dev_config_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     assert config.llm_thinking == "high"
     assert config.state_path == Path(".coronetbot-state.json")
     assert config.backfill_lookback_seconds == 3600
+    assert config.max_images_per_message == 4
+    assert config.max_image_bytes == 8_000_000
 
 
 def test_production_server_and_codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

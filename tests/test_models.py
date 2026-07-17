@@ -25,6 +25,30 @@ def test_blocked_result() -> None:
     assert result.violations[0].quote == "idiot"
 
 
+def test_image_violation_must_cite_a_supplied_image() -> None:
+    payload = {
+        "allowed": False,
+        "violations": [
+            {
+                "rule": "Personal attack",
+                "quote": "visible insulting caption",
+                "explanation": "The image attacks a person.",
+                "attachment_filename": "caption.png",
+            }
+        ],
+        "suggested_revision": "Remove the insulting caption.",
+    }
+    result = ModerationResult.from_json(
+        payload,
+        "",
+        image_filenames={"caption.png"},
+    )
+    assert result.violations[0].attachment_filename == "caption.png"
+
+    with pytest.raises(InvalidModerationResponse, match="unknown image"):
+        ModerationResult.from_json(payload, "", image_filenames={"other.png"})
+
+
 @pytest.mark.parametrize(
     "payload",
     [

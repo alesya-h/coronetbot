@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from coronetbot.moderator import ModerationContext, Moderator, _ModerationOutput
+from coronetbot.moderator import ModerationContext, ModerationImage, Moderator, _ModerationOutput
 
 
 def test_context_quotation_corpus_includes_proposed_title_only() -> None:
@@ -57,6 +57,44 @@ async def test_codex_backend_uses_structured_ephemeral_request(
     assert captured["reasoning"] == {"effort": "high"}
     assert captured["store"] is False
     assert captured["text_format"] is _ModerationOutput
+
+
+@pytest.mark.asyncio
+async def test_image_is_sent_as_ephemeral_multimodal_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class Responses:
+        def parse(self, **kwargs: object) -> object:
+            captured.update(kwargs)
+            parsed = _ModerationOutput(
+                allowed=True,
+                violations=[],
+                suggested_revision=None,
+            )
+            return SimpleNamespace(output_parsed=parsed)
+
+    moderator = Moderator(model="gpt-5.6-sol", rules="Be civil")
+
+    async def new_client() -> object:
+        return SimpleNamespace(responses=Responses())
+
+    monkeypatch.setattr(moderator, "_new_client", new_client)
+    result = await moderator.moderate(
+        "See attached",
+        images=(ModerationImage("proof.png", "image/png", b"png bytes"),),
+    )
+
+    assert result.allowed
+    request_input = captured["input"]
+    assert isinstance(request_input, list)
+    content = request_input[0]["content"]
+    assert json.loads(content[0]["text"])["proposed_message"] == "See attached"
+    assert content[1]["text"].endswith("proof.png")
+    assert content[2]["type"] == "input_image"
+    assert content[2]["image_url"].startswith("data:image/png;base64,")
+    assert captured["store"] is False
 
 
 @pytest.mark.asyncio

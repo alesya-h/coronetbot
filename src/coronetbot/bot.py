@@ -4,9 +4,11 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import discord
 from discord import app_commands
@@ -15,12 +17,39 @@ from . import __version__
 from .config import Config
 from .formatting import chunks, quote, reasons, removal_notice, validation_notice
 from .models import ModerationResult
-from .moderator import ModerationContext, ModerationServiceError, Moderator
+from .moderator import ModerationContext, ModerationImage, ModerationServiceError, Moderator
 from .state import StateStore
 
 LOG = logging.getLogger(__name__)
 AUDIT_CHANNEL_NAME = "bot-moderation-audit"
 IGNORED_CATEGORY_IDS = {1491596963647324180}  # Committee internal
+IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedAttachments:
+    metadata: list[dict[str, Any]]
+    images: tuple[ModerationImage, ...]
+    unavailable_images: tuple[str, ...]
+
+
+def detected_image_media_type(data: bytes) -> str | None:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def attachment_looks_like_image(filename: str, content_type: str | None) -> bool:
+    return bool(
+        (content_type and content_type.casefold().startswith("image/"))
+        or Path(filename).suffix.casefold() in IMAGE_EXTENSIONS
+    )
 
 
 class CoronetClient(discord.Client):
@@ -142,6 +171,9 @@ class CoronetClient(discord.Client):
             parent = thread.parent
             is_forum = isinstance(parent, discord.ForumChannel)
             parent_name = getattr(parent, "name", "unknown")
+            prepared = await self._prepare_attachments(
+                starter.attachments if starter is not None else []
+            )
             context = ModerationContext(
                 channel_type="forum_post" if is_forum else "general_chat",
                 channel_name=parent_name,
@@ -151,33 +183,39 @@ class CoronetClient(discord.Client):
                 thread_root=body or None,
                 requested_action=self._requested_action(body),
                 proposed_title=thread.name,
-                attachments=(
-                    [
-                        {
-                            "filename": attachment.filename,
-                            "content_type": attachment.content_type,
-                            "size": attachment.size,
-                            "source_url": attachment.url,
-                            "extracted_text": None,
-                        }
-                        for attachment in starter.attachments
-                    ]
-                    if starter is not None
-                    else []
+                attachments=prepared.metadata,
+                cited_material_accessible=(
+                    True if prepared.images else False if prepared.metadata else None
                 ),
             )
-            original_draft = f"Title: {thread.name}" + (f"\n\n{body}" if body else "")
+            draft_text = f"Title: {thread.name}" + (f"\n\n{body}" if body else "")
+            starter_attachments = starter.attachments if starter is not None else []
+            original_draft = self._draft_with_attachments(draft_text, starter_attachments)
             received = (
                 f"**Thread title received** ({source})\n"
                 f"Thread: `{thread.id}` · Parent: `#{parent_name}`\n"
                 f"Author: `{author}` (`{getattr(author, 'id', thread.owner_id)}`)\n\n"
-                f"**Draft**\n{quote(original_draft)}"
+                f"**Draft**\n{quote(draft_text)}\n\n"
+                f"**Attachments**\n{self._attachments_audit_listing(starter_attachments)}"
             )
             if not await self._audit(received):
                 return False
+            if prepared.metadata and not await self._audit(
+                self._attachment_analysis_audit("thread", thread.id, prepared)
+            ):
+                return False
+            if prepared.unavailable_images:
+                if await self._audit(
+                    f"**Thread-title judgement** — thread `{thread.id}`\n"
+                    "ERROR — one or more image attachments could not be analysed; failed open."
+                ):
+                    await self.state.mark_thread_title(thread.id, thread.name)
+                return False
 
             try:
-                result = await self.moderator.moderate(body, context=context)
+                result = await self.moderator.moderate(
+                    body, context=context, images=prepared.images
+                )
             except ModerationServiceError:
                 LOG.exception("Thread-title moderation unavailable (thread=%s)", thread.id)
                 if await self._audit(
@@ -254,19 +292,38 @@ class CoronetClient(discord.Client):
             LOG.error("Audit unavailable; message left intact (message=%s)", message.id)
             return
 
-        context = await self._moderation_context(message)
-        if not message.content.strip() and context.proposed_title is None:
+        context, prepared = await self._moderation_context(message)
+        if prepared.metadata and not await self._audit(
+            self._attachment_analysis_audit("message", message.id, prepared)
+        ):
+            LOG.error(
+                "Attachment analysis could not be audited; message left intact (%s)", message.id
+            )
+            return
+        if prepared.unavailable_images:
             if await self._audit(
                 self._judgement_audit(
                     message,
-                    "ALLOWED — no textual content; attachments were logged but not analysed.",
+                    "ERROR — one or more image attachments could not be analysed; failed open.",
+                )
+            ):
+                await self.state.mark_processed(message.channel.id, message.id)
+            return
+        if not message.content.strip() and context.proposed_title is None and not prepared.images:
+            if await self._audit(
+                self._judgement_audit(
+                    message,
+                    "ALLOWED — no textual or supported image content; other attachments "
+                    "were logged but not analysed.",
                 )
             ):
                 await self.state.mark_processed(message.channel.id, message.id)
             return
 
         try:
-            result = await self.moderator.moderate(message.content, context=context)
+            result = await self.moderator.moderate(
+                message.content, context=context, images=prepared.images
+            )
         except ModerationServiceError:
             LOG.exception(
                 "Moderation unavailable; message left intact (guild=%s channel=%s message=%s)",
@@ -368,7 +425,9 @@ class CoronetClient(discord.Client):
     def _channel_is_ignored(cls, channel: object) -> bool:
         return cls._channel_category_id(channel) in IGNORED_CATEGORY_IDS
 
-    async def _moderation_context(self, message: discord.Message) -> ModerationContext:
+    async def _moderation_context(
+        self, message: discord.Message
+    ) -> tuple[ModerationContext, PreparedAttachments]:
         channel = message.channel
         channel_name = getattr(channel, "name", "unknown")
         channel_description = getattr(channel, "topic", None) or ""
@@ -428,18 +487,9 @@ class CoronetClient(discord.Client):
             for previous in recent_messages
             if previous.author.id == message.author.id
         ]
-        attachments = [
-            {
-                "filename": attachment.filename,
-                "content_type": attachment.content_type,
-                "size": attachment.size,
-                "source_url": attachment.url,
-                "extracted_text": None,
-            }
-            for attachment in message.attachments
-        ]
+        prepared = await self._prepare_attachments(message.attachments)
 
-        return ModerationContext(
+        context = ModerationContext(
             channel_type=channel_type,
             channel_name=channel_name,
             channel_description=channel_description,
@@ -451,9 +501,83 @@ class CoronetClient(discord.Client):
             recent_context=recent_context,
             recent_same_author=recent_same_author,
             proposed_title=proposed_title,
-            attachments=attachments,
-            cited_material_accessible=True if attachments else None,
+            attachments=prepared.metadata,
+            cited_material_accessible=(
+                True if prepared.images else False if prepared.metadata else None
+            ),
         )
+        return context, prepared
+
+    async def _prepare_attachments(
+        self, attachments: Sequence[discord.Attachment]
+    ) -> PreparedAttachments:
+        metadata: list[dict[str, Any]] = []
+        images: list[ModerationImage] = []
+        unavailable: list[str] = []
+
+        for attachment in attachments:
+            item: dict[str, Any] = {
+                "filename": attachment.filename,
+                "content_type": attachment.content_type,
+                "size": attachment.size,
+                "source_url": attachment.url,
+                "extracted_text": None,
+            }
+            if not attachment_looks_like_image(attachment.filename, attachment.content_type):
+                item["image_analysis"] = "not an image; content not analysed"
+                metadata.append(item)
+                continue
+            if len(images) >= self.config.max_images_per_message:
+                item["image_analysis"] = "not analysed; image-count limit exceeded"
+                unavailable.append(attachment.filename)
+                metadata.append(item)
+                continue
+            if attachment.size > self.config.max_image_bytes:
+                item["image_analysis"] = "not analysed; image-size limit exceeded"
+                unavailable.append(attachment.filename)
+                metadata.append(item)
+                continue
+
+            try:
+                data = await attachment.read(use_cached=True)
+            except (discord.HTTPException, OSError):
+                item["image_analysis"] = "not analysed; download failed"
+                unavailable.append(attachment.filename)
+                metadata.append(item)
+                continue
+
+            if len(data) > self.config.max_image_bytes:
+                item["image_analysis"] = "not analysed; downloaded image exceeded size limit"
+                unavailable.append(attachment.filename)
+                metadata.append(item)
+                continue
+            media_type = detected_image_media_type(data)
+            if media_type is None:
+                item["image_analysis"] = "not analysed; unsupported or invalid image data"
+                unavailable.append(attachment.filename)
+                metadata.append(item)
+                continue
+
+            item["image_analysis"] = f"included in moderation request as {media_type}"
+            metadata.append(item)
+            images.append(
+                ModerationImage(
+                    filename=attachment.filename,
+                    media_type=media_type,
+                    data=data,
+                )
+            )
+
+        return PreparedAttachments(metadata, tuple(images), tuple(unavailable))
+
+    @staticmethod
+    def _attachment_analysis_audit(
+        source_type: str,
+        source_id: int,
+        prepared: PreparedAttachments,
+    ) -> str:
+        lines = [f"- `{item['filename']}`: {item['image_analysis']}" for item in prepared.metadata]
+        return f"**Attachment analysis** — {source_type} `{source_id}`\n" + "\n".join(lines)
 
     @staticmethod
     def _requested_action(thread_root: str | None) -> str | None:
@@ -485,10 +609,19 @@ class CoronetClient(discord.Client):
             return None
 
     @staticmethod
-    def _original_draft(message: discord.Message, context: ModerationContext) -> str:
+    def _draft_with_attachments(text: str, attachments: Sequence[discord.Attachment]) -> str:
+        if not attachments:
+            return text
+        names = "\n".join(f"- {attachment.filename}" for attachment in attachments)
+        prefix = f"{text}\n\n" if text else ""
+        return f"{prefix}Attachments:\n{names}"
+
+    @classmethod
+    def _original_draft(cls, message: discord.Message, context: ModerationContext) -> str:
+        text = message.content
         if context.proposed_title is not None:
-            return f"Title: {context.proposed_title}\n\n{message.content}"
-        return message.content
+            text = f"Title: {context.proposed_title}\n\n{text}"
+        return cls._draft_with_attachments(text, message.attachments)
 
     async def _backfill_missed_messages(self, guild: discord.Guild) -> None:
         processed = 0
@@ -569,15 +702,19 @@ class CoronetClient(discord.Client):
             LOG.exception("Could not write to audit channel %s", channel.id)
             return False
 
+    @staticmethod
+    def _attachments_audit_listing(attachments: Sequence[discord.Attachment]) -> str:
+        lines = [
+            f"- `{attachment.filename}` ({attachment.size} bytes, "
+            f"{attachment.content_type or 'unknown type'}): {attachment.url}"
+            for attachment in attachments
+        ]
+        return "\n".join(lines) if lines else "None"
+
     def _received_audit(self, message: discord.Message, *, source: str) -> str:
         channel_name = getattr(message.channel, "name", "unknown")
         body = message.content if message.content else "_(no text content)_"
-        attachment_lines = [
-            f"- `{attachment.filename}` ({attachment.size} bytes, "
-            f"{attachment.content_type or 'unknown type'}): {attachment.url}"
-            for attachment in message.attachments
-        ]
-        attachments = "\n".join(attachment_lines) if attachment_lines else "None"
+        attachments = self._attachments_audit_listing(message.attachments)
         return (
             f"**Message received** ({source})\n"
             f"Message: `{message.id}` · [jump]({message.jump_url})\n"
@@ -607,7 +744,11 @@ class CoronetClient(discord.Client):
         channel_id = interaction.channel_id
         return f"guild `{interaction.guild.id}`, channel `{channel_id}`"
 
-    async def _validation_context(self, interaction: discord.Interaction) -> ModerationContext:
+    async def _validation_context(
+        self,
+        interaction: discord.Interaction,
+        prepared: PreparedAttachments | None = None,
+    ) -> ModerationContext:
         channel = interaction.channel
         if channel is None:
             return ModerationContext(channel_name="DM")
@@ -653,18 +794,44 @@ class CoronetClient(discord.Client):
             requested_action=self._requested_action(thread_root),
             recent_context=recent_context,
             recent_same_author=recent_same_author,
+            attachments=prepared.metadata if prepared else [],
+            cited_material_accessible=(
+                True
+                if prepared and prepared.images
+                else False
+                if prepared and prepared.metadata
+                else None
+            ),
         )
 
     def _register_commands(self) -> None:
-        @self.tree.command(name="validate", description="Validate and refine a draft message")
-        @app_commands.describe(text="The draft to validate before posting")
-        async def validate(interaction: discord.Interaction, text: str) -> None:
+        @self.tree.command(name="validate", description="Validate a draft and optional image")
+        @app_commands.describe(
+            text="The draft text to validate before posting",
+            image="An optional draft image attachment to validate",
+        )
+        async def validate(
+            interaction: discord.Interaction,
+            text: str | None = None,
+            image: discord.Attachment | None = None,
+        ) -> None:
             await interaction.response.defer(ephemeral=True, thinking=True)
+            text = text or ""
+            attachment_list = [image] if image is not None else []
+            prepared = await self._prepare_attachments(attachment_list)
+            displayed_draft = self._draft_with_attachments(text, attachment_list)
+            attachment_audit = (
+                f"\n\n**Attachment**\n`{image.filename}` ({image.size} bytes, "
+                f"{image.content_type or 'unknown type'}): {image.url}"
+                if image is not None
+                else ""
+            )
             request_audit = (
                 "**Validation request**\n"
                 f"User: `{interaction.user}` (`{interaction.user.id}`)\n"
                 f"Context: {self._interaction_context(interaction)}\n\n"
-                f"**Draft**\n{quote(text)}"
+                f"**Draft**\n{quote(displayed_draft or '_(empty draft)_')}"
+                f"{attachment_audit}"
             )
             if not await self._audit(request_audit):
                 await _send_followups(
@@ -672,12 +839,29 @@ class CoronetClient(discord.Client):
                     "⚠️ Validation is unavailable because audit logging is unavailable.",
                 )
                 return
+            if prepared.metadata and not await self._audit(
+                self._attachment_analysis_audit("validation", interaction.id, prepared)
+            ):
+                await _send_followups(
+                    interaction,
+                    "⚠️ Validation is unavailable because attachment audit logging failed.",
+                )
+                return
 
             try:
-                context = await self._validation_context(interaction)
-                result = await self.moderator.moderate(text, context=context)
-                output = validation_notice(text, result)
-                judgement = "ALLOWED" if result.allowed else f"BLOCKED\n\n{reasons(result)}"
+                if not text.strip() and image is None:
+                    output = "⚠️ Provide draft text, an image, or both."
+                    judgement = "NOT ASSESSED — empty draft."
+                elif prepared.unavailable_images:
+                    output = "⚠️ The image could not be analysed, so the draft was not assessed."
+                    judgement = "ERROR — image attachment unavailable; failed open."
+                else:
+                    context = await self._validation_context(interaction, prepared)
+                    result = await self.moderator.moderate(
+                        text, context=context, images=prepared.images
+                    )
+                    output = validation_notice(displayed_draft, result)
+                    judgement = "ALLOWED" if result.allowed else f"BLOCKED\n\n{reasons(result)}"
             except ModerationServiceError:
                 LOG.exception("Validation unavailable (user=%s)", interaction.user.id)
                 output = "⚠️ Validation is temporarily unavailable. Your draft was not assessed."
@@ -709,7 +893,7 @@ class CoronetClient(discord.Client):
         async def help_command(interaction: discord.Interaction) -> None:
             output = (
                 f"**CoronetBot {__version__}**\n\n"
-                "`/validate text` — validate and refine a draft before posting\n"
+                "`/validate [text] [image]` — validate and refine a draft before posting\n"
                 "`/rules` — show the moderation rules\n"
                 "`/help` — show this message\n\n"
                 f"Mode: `{self.config.mode}` (`{self.config.guild_name}`)\n"

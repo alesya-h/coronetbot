@@ -1,4 +1,4 @@
-from coronetbot.formatting import chunks, quote, removal_notice, validation_notice
+from coronetbot.formatting import chunks, quote, reasons, removal_notice, validation_notice
 from coronetbot.models import ModerationResult, Violation
 
 
@@ -29,6 +29,22 @@ def test_removal_notice_contains_required_sections() -> None:
     assert "Return to the server" in notice
     assert "`/validate` here" not in notice
     assert "bot-moderation-audit" not in notice
+
+
+def test_image_reason_names_the_attachment() -> None:
+    result = ModerationResult(
+        allowed=False,
+        violations=(
+            Violation(
+                "Personal attack",
+                "dishonest idiot",
+                "Attacks the person.",
+                attachment_filename="caption.png",
+            ),
+        ),
+        suggested_revision="Remove the personal attack.",
+    )
+    assert "in image `caption.png`" in reasons(result)
 
 
 def test_validation_notice_does_not_expose_internal_audit_channel() -> None:
