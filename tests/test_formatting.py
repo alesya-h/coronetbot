@@ -5,6 +5,7 @@ from coronetbot.formatting import (
     reasons,
     removal_notice,
     thread_deletion_participant_notice,
+    title_prefix_notice,
     validation_notice,
 )
 from coronetbot.models import ModerationResult, Violation
@@ -53,6 +54,13 @@ def test_image_reason_names_the_attachment() -> None:
         suggested_revision="Remove the personal attack.",
     )
     assert "in image `caption.png`" in reasons(result)
+
+
+def test_title_prefix_notice_leaves_post_in_place() -> None:
+    notice = title_prefix_notice("A question without a prefix", "Q: ")
+    assert "left in place" in notice
+    assert "`Q: `" in notice
+    assert "not a moderation violation" in notice
 
 
 def test_edit_public_notice_preserves_approved_version() -> None:

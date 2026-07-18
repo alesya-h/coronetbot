@@ -3,7 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from coronetbot.moderator import ModerationContext, ModerationImage, Moderator, _ModerationOutput
+from coronetbot.moderator import (
+    ModerationContext,
+    ModerationImage,
+    ModerationServiceError,
+    Moderator,
+    _ModerationOutput,
+)
 
 
 def test_context_quotation_corpus_includes_proposed_title_only() -> None:
@@ -36,6 +42,7 @@ async def test_codex_backend_uses_structured_ephemeral_request(
                 allowed=True,
                 violations=[],
                 suggested_revision=None,
+                title_prefix_advisory=None,
             )
             return SimpleNamespace(output_parsed=parsed)
 
@@ -73,6 +80,7 @@ async def test_image_is_sent_as_ephemeral_multimodal_input(
                 allowed=True,
                 violations=[],
                 suggested_revision=None,
+                title_prefix_advisory=None,
             )
             return SimpleNamespace(output_parsed=parsed)
 
@@ -99,6 +107,64 @@ async def test_image_is_sent_as_ephemeral_multimodal_input(
 
 
 @pytest.mark.asyncio
+async def test_invalid_response_is_retried_with_a_fresh_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clients_created = 0
+
+    class Responses:
+        def __init__(self, valid: bool) -> None:
+            self.valid = valid
+
+        def parse(self, **_kwargs: object) -> object:
+            parsed = _ModerationOutput(
+                allowed=self.valid,
+                violations=[],
+                suggested_revision=None,
+                title_prefix_advisory=None,
+            )
+            return SimpleNamespace(output_parsed=parsed)
+
+    moderator = Moderator(model="gpt-5.6-sol", rules="Be civil")
+
+    async def new_client() -> object:
+        nonlocal clients_created
+        clients_created += 1
+        return SimpleNamespace(responses=Responses(valid=clients_created == 2))
+
+    monkeypatch.setattr(moderator, "_new_client", new_client)
+    result = await moderator.moderate("A draft")
+
+    assert result.allowed
+    assert clients_created == 2
+
+
+@pytest.mark.asyncio
+async def test_exhausted_application_retry_fails_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clients_created = 0
+
+    class Responses:
+        def parse(self, **_kwargs: object) -> object:
+            raise RuntimeError("provider output that must not escape")
+
+    moderator = Moderator(model="gpt-5.6-sol", rules="Be civil")
+
+    async def new_client() -> object:
+        nonlocal clients_created
+        clients_created += 1
+        return SimpleNamespace(responses=Responses())
+
+    monkeypatch.setattr(moderator, "_new_client", new_client)
+    with pytest.raises(ModerationServiceError, match="Codex moderation request failed") as error:
+        await moderator.moderate("A private draft")
+
+    assert clients_created == 2
+    assert error.value.__cause__ is None
+
+
+@pytest.mark.asyncio
 async def test_title_only_thread_is_reviewed(monkeypatch: pytest.MonkeyPatch) -> None:
     class Responses:
         def parse(self, **_kwargs: object) -> object:
@@ -106,6 +172,7 @@ async def test_title_only_thread_is_reviewed(monkeypatch: pytest.MonkeyPatch) ->
                 allowed=True,
                 violations=[],
                 suggested_revision=None,
+                title_prefix_advisory=None,
             )
             return SimpleNamespace(output_parsed=parsed)
 

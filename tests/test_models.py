@@ -10,6 +10,20 @@ def test_allowed_result() -> None:
     assert result.allowed
 
 
+def test_allowed_result_can_include_title_prefix_advisory() -> None:
+    result = ModerationResult.from_json(
+        {
+            "allowed": True,
+            "violations": [],
+            "suggested_revision": None,
+            "title_prefix_advisory": "Q: ",
+        },
+        "question",
+    )
+    assert result.allowed
+    assert result.title_prefix_advisory == "Q: "
+
+
 def test_blocked_result() -> None:
     result = ModerationResult.from_json(
         {
@@ -54,6 +68,12 @@ def test_image_violation_must_cite_a_supplied_image() -> None:
     [
         {},
         {"allowed": "yes", "violations": []},
+        {
+            "allowed": True,
+            "violations": [],
+            "suggested_revision": None,
+            "title_prefix_advisory": "X: ",
+        },
         {"allowed": False, "violations": [], "suggested_revision": "rewrite"},
         {
             "allowed": False,

@@ -40,6 +40,18 @@ def removal_notice(channel: str, original: str, result: ModerationResult) -> str
     )
 
 
+def title_prefix_notice(title: str, recommended_prefix: str | None) -> str:
+    if recommended_prefix is None:
+        instruction = "Please begin it with `C: ` for a claim or `Q: ` for a question."
+    else:
+        instruction = f"Please edit it to begin with `{recommended_prefix}`."
+    return (
+        "Your forum post has been left in place, but its title is missing or uses the wrong "
+        f"claim/question prefix.\n\n**Current title:**\n{quote(title)}\n\n{instruction} "
+        "The prefix is a forum-organising convention, not a moderation violation."
+    )
+
+
 def edited_message_public_notice(author: str, approved_version: str) -> str:
     return (
         f"A post from **{author}** was deleted because its author edited it and the edited "

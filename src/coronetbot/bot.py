@@ -23,6 +23,7 @@ from .formatting import (
     reasons,
     removal_notice,
     thread_deletion_participant_notice,
+    title_prefix_notice,
     validation_notice,
 )
 from .models import ModerationResult
@@ -267,17 +268,42 @@ class CoronetClient(discord.Client):
                 return False
 
             if result.allowed:
-                if await self._audit(
+                prefix_reminder = self._title_prefix_reminder(
+                    thread.name,
+                    is_forum=is_forum,
+                    recommended_prefix=result.title_prefix_advisory,
+                )
+                bot_response = f"\n{quote(prefix_reminder)}" if prefix_reminder else " None."
+                if not await self._audit(
                     f"**Thread-title judgement** — thread `{thread.id}`\n"
-                    "ALLOWED — no rules violated.\nBot response: None."
+                    f"ALLOWED — no rules violated.\nBot response: {bot_response}"
                 ):
-                    await self.state.mark_thread_title(thread.id, thread.name)
-                    if starter is not None:
-                        await self.state.mark_processed(
-                            thread.id,
-                            starter.id,
-                            approved=self._approved_from_message(starter),
-                        )
+                    return False
+
+                prefix_dm_status = "not needed"
+                if prefix_reminder is not None:
+                    prefix_dm_status = "not sent; author unavailable"
+                    if author is not None:
+                        prefix_dm_status = "sent"
+                        try:
+                            for part in chunks(prefix_reminder):
+                                await author.send(
+                                    part, allowed_mentions=discord.AllowedMentions.none()
+                                )
+                        except discord.HTTPException:
+                            prefix_dm_status = "failed"
+                    await self._audit(
+                        f"**Thread-title prefix reminder** — thread `{thread.id}`\n"
+                        f"DM delivery: **{prefix_dm_status}**\nThread: **left in place**"
+                    )
+
+                await self.state.mark_thread_title(thread.id, thread.name)
+                if starter is not None:
+                    await self.state.mark_processed(
+                        thread.id,
+                        starter.id,
+                        approved=self._approved_from_message(starter),
+                    )
                 return False
 
             notice = removal_notice(parent_name, original_draft, result)
@@ -669,6 +695,20 @@ class CoronetClient(discord.Client):
             or self._channel_is_ignored(message.channel)
             or (self.audit_channel is not None and message.channel.id == self.audit_channel.id)
         )
+
+    @staticmethod
+    def _title_prefix_reminder(
+        title: str,
+        *,
+        is_forum: bool,
+        recommended_prefix: str | None,
+    ) -> str | None:
+        if not is_forum:
+            return None
+        has_conventional_prefix = re.match(r"^[CQ]: ", title) is not None
+        if recommended_prefix is None and has_conventional_prefix:
+            return None
+        return title_prefix_notice(title, recommended_prefix)
 
     @staticmethod
     def _channel_category_id(channel: object) -> int | None:

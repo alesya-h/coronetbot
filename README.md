@@ -88,9 +88,11 @@ moderation are scoped to the selected server.
 
 The bot's role must be able to view every moderated channel and must sit high enough in
 the server's permission structure to delete messages and threads there. When a new forum
-post or chat-thread starter is rejected, the entire thread container is deleted so a
-rule-breaking title cannot remain visible. Private channels not visible to the bot cannot
-be moderated.
+post or chat-thread starter is substantively rejected, the entire thread container is
+deleted so a rule-breaking title cannot remain visible. A missing, malformed, or mismatched
+forum `C: ` / `Q: ` prefix is only an organising issue: the post remains and the author
+receives an audited private reminder. Private channels not visible to the bot cannot be
+moderated.
 
 ## LLM configuration
 
@@ -117,8 +119,11 @@ Codex CLI, Node.js, or per-message subprocess in the runtime.
 | `CB_CODEX_HOME` | no | `~/.codex` |
 
 Calls are bounded by a concurrency semaphore. Authentication/refresh operations are
-serialized, while API requests use independent clients and may run concurrently. Keep
-concurrency conservative because ChatGPT subscription limits differ from API limits.
+serialized, while API requests use independent clients and may run concurrently. Each
+classification gets up to two full application attempts with a fresh client; this covers
+transient transport, structured-output, and response-validation failures. Each underlying
+SDK request may additionally use `CB_LLM_RETRIES`. Keep concurrency conservative because
+ChatGPT subscription limits differ from API limits.
 
 The bot stores the highest processed message ID per channel, a hash of each reviewed
 thread title, and up to 5,000 recent approved message versions in `CB_STATE_PATH`. Approved

@@ -256,11 +256,13 @@ Social acknowledgements and low-content friendly messages may be approved in cha
 
 ### B. Original forum post
 
-Review the title and body together. A structurally non-compliant post must be returned for editing, but describe it as “returned for editing,” not as abusive or harmful.
+Review the title and body together. Infer whether the post is a claim or question from its substance, not solely from its prefix. The conventional prefixes are `C: ` for a claim and `Q: ` for a question, but a missing, malformed, or mismatched prefix is not a moderation violation and must never be grounds for returning or deleting a post. The application may leave the post in place and privately ask the author to add or correct the prefix.
+
+A post that fails a substantive claim/question requirement may be returned for editing, but describe it as “returned for editing,” not as abusive or harmful.
 
 #### B1. Claim post
 
-The title must begin `C:` and be no more than 100 characters including the prefix. It may contain the complete claim or a faithful shortened/simplified version when the complete claim does not fit. The complete claim may instead be stated in the body; do not require the body to duplicate a claim already fully stated in the title.
+A claim title should conventionally begin `C: ` and must be no more than 100 characters. The prefix is recommended but not required for moderation approval. The title may contain the complete claim or a faithful shortened/simplified version when the complete claim does not fit. The complete claim may instead be stated in the body; do not require the body to duplicate a claim already fully stated in the title.
 
 Read the title, body, and directly supplied images together. The post as a whole must contain:
 
@@ -290,7 +292,7 @@ A normative claim is allowed when its factual basis and value or policy principl
 
 #### B2. Question post
 
-The title must begin `Q:` and be no more than 100 characters including the prefix. It may contain the complete question or a faithful shortened/simplified version when the complete question does not fit. The complete question may instead be stated in the body; do not require the body to duplicate a question already fully stated in the title.
+A question title should conventionally begin `Q: ` and must be no more than 100 characters. The prefix is recommended but not required for moderation approval. It may contain the complete question or a faithful shortened/simplified version when the complete question does not fit. The complete question may instead be stated in the body; do not require the body to duplicate a question already fully stated in the title.
 
 Read the title, body, and directly supplied images together. The post as a whole must contain one genuine, neutrally framed, reasonably answerable inquiry. A body is optional when the title is self-contained. The author may add context, subject details, relevant images, or an explanation of what information might answer the question, but none is a mandatory section. Labels such as `What I am trying to understand:`, `Subject:`, and `What would answer it:` are optional.
 

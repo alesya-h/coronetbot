@@ -1,4 +1,4 @@
-Title: "Q: your question", "C: your claim". Discord has a 100-character title limit, so a shortened title is fine if the complete question/claim is in the body.
+Please title questions "Q: your question" and claims "C: your claim". A missing or incorrect prefix will not cause removal; the bot will ask you to correct it. Discord has a 100-character title limit, so a shortened title is fine if the complete question/claim is in the body.
 
 To keep things organised, each claim post must provide:
 1. One coherent claim, stated fully in the title or body. Do not repeat a claim already clear from the title. Labels such as "Claim:" are helpful but optional. Closely connected points supported by the same evidence may stay together; please separate unrelated concerns.

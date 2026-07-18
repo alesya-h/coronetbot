@@ -32,6 +32,29 @@ def test_other_categories_are_not_ignored() -> None:
     assert not CoronetClient._channel_is_ignored(channel)
 
 
+def test_forum_prefix_reminder_is_soft_and_handles_mismatches() -> None:
+    assert (
+        CoronetClient._title_prefix_reminder(
+            "C: A valid claim", is_forum=True, recommended_prefix=None
+        )
+        is None
+    )
+    missing = CoronetClient._title_prefix_reminder(
+        "A question", is_forum=True, recommended_prefix="Q: "
+    )
+    assert missing is not None and "left in place" in missing and "`Q: `" in missing
+    mismatched = CoronetClient._title_prefix_reminder(
+        "C: What happened?", is_forum=True, recommended_prefix="Q: "
+    )
+    assert mismatched is not None and "`Q: `" in mismatched
+    assert (
+        CoronetClient._title_prefix_reminder(
+            "A chat thread", is_forum=False, recommended_prefix="Q: "
+        )
+        is None
+    )
+
+
 def test_image_media_type_is_detected_from_content() -> None:
     assert detected_image_media_type(b"\x89PNG\r\n\x1a\nrest") == "image/png"
     assert detected_image_media_type(b"\xff\xd8\xffrest") == "image/jpeg"

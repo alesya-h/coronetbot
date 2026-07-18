@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -11,6 +12,9 @@ from codex_backend_sdk import OpenAI
 from pydantic import BaseModel, ConfigDict
 
 from .models import ModerationResult
+
+LOG = logging.getLogger(__name__)
+APPLICATION_ATTEMPTS = 2
 
 SYSTEM_PROMPT = """You are Coronet's constructive-discourse review agent for a residential
 owners' Discord. Preserve robust substantive disagreement while enforcing the supplied
@@ -36,11 +40,16 @@ Return exactly one object with this shape:
       "attachment_filename": "exact image filename" | null
     }
   ],
-  "suggested_revision": "meaning-preserving rewrite" | null
+  "suggested_revision": "meaning-preserving rewrite" | null,
+  "title_prefix_advisory": "C: " | "Q: " | null
 }
 
-For approval, return an empty violations array and null suggested_revision. For rejection,
-report no more than the three highest-priority fixes. For a text-based violation, set
+For approval, return an empty violations array and null suggested_revision. For an original
+forum post, infer whether it is substantively a claim or question. If its title prefix is
+missing, malformed, or mismatched, return `C: ` or `Q: ` in title_prefix_advisory as
+appropriate; otherwise return null. A prefix issue is never a violation and must never cause
+rejection. For non-forum content, return null. For rejection, report no more than the three
+highest-priority fixes. For a text-based violation, set
 attachment_filename to null and make quote a minimal exact substring of proposed_message or
 proposed_title, never context. For a violation visible in an attached image, set
 attachment_filename to that image's exact supplied filename and quote the minimal visible
@@ -109,6 +118,7 @@ class _ModerationOutput(BaseModel):
     allowed: bool
     violations: list[_ViolationOutput]
     suggested_revision: str | None
+    title_prefix_advisory: str | None
 
 
 class ModerationServiceError(RuntimeError):
@@ -162,19 +172,33 @@ class Moderator:
             return ModerationResult(allowed=True)
 
         async with self.semaphore:
-            try:
-                client = await self._new_client()
-                output = await asyncio.to_thread(self._request, client, text, context, images)
-                value: Any = output.model_dump(mode="python")
-                return ModerationResult.from_json(
-                    value,
-                    context.quotation_corpus(text),
-                    image_filenames={image.filename for image in images},
-                )
-            except Exception:
-                # SDK/Pydantic errors can contain provider output. Suppress the cause so
-                # operational tracebacks cannot accidentally retain message content.
-                raise ModerationServiceError("Codex moderation request failed") from None
+            for attempt in range(1, APPLICATION_ATTEMPTS + 1):
+                try:
+                    client = await self._new_client()
+                    output = await asyncio.to_thread(self._request, client, text, context, images)
+                    value: Any = output.model_dump(mode="python")
+                    return ModerationResult.from_json(
+                        value,
+                        context.quotation_corpus(text),
+                        image_filenames={image.filename for image in images},
+                    )
+                except Exception as error:
+                    if attempt < APPLICATION_ATTEMPTS:
+                        # Log only the exception class: provider/Pydantic errors may contain
+                        # private message text or raw model output.
+                        LOG.warning(
+                            "Codex moderation attempt %s/%s failed (%s); retrying",
+                            attempt,
+                            APPLICATION_ATTEMPTS,
+                            type(error).__name__,
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
+                    # Suppress the cause so operational tracebacks cannot accidentally
+                    # retain message content or provider output.
+                    raise ModerationServiceError("Codex moderation request failed") from None
+
+        raise AssertionError("unreachable")
 
     async def _new_client(self) -> Any:
         async with self.auth_lock:
