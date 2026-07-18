@@ -28,6 +28,7 @@ class StateStore:
     cursors: dict[int, int] = field(default_factory=dict)
     thread_titles: dict[int, str] = field(default_factory=dict)
     approved_messages: dict[int, ApprovedMessage] = field(default_factory=dict)
+    pending_messages: dict[int, set[int]] = field(default_factory=dict)
     _lock: asyncio.Lock = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -90,11 +91,22 @@ class StateStore:
                     )
                 except (KeyError, TypeError, ValueError):
                     continue
+        raw_pending = data.get("pending_messages", {}) if isinstance(data, dict) else {}
+        pending_messages: dict[int, set[int]] = {}
+        if isinstance(raw_pending, dict):
+            for channel_id, message_ids in raw_pending.items():
+                if not isinstance(message_ids, list):
+                    continue
+                try:
+                    pending_messages[int(channel_id)] = {int(value) for value in message_ids}
+                except (TypeError, ValueError):
+                    continue
         store = cls(
             path=path,
             cursors=cursors,
             thread_titles=thread_titles,
             approved_messages=approved_messages,
+            pending_messages=pending_messages,
         )
         if migrated_titles:
             store._write_locked()
@@ -102,7 +114,30 @@ class StateStore:
 
     async def seen(self, channel_id: int, message_id: int) -> bool:
         async with self._lock:
+            if message_id in self.pending_messages.get(channel_id, set()):
+                return False
             return message_id <= self.cursors.get(channel_id, 0)
+
+    async def pending(self, channel_id: int) -> tuple[int, ...]:
+        async with self._lock:
+            return tuple(sorted(self.pending_messages.get(channel_id, set())))
+
+    async def mark_pending(self, channel_id: int, message_id: int) -> None:
+        async with self._lock:
+            pending = self.pending_messages.setdefault(channel_id, set())
+            if message_id not in pending:
+                pending.add(message_id)
+                self._write_locked()
+
+    async def clear_pending(self, channel_id: int, message_id: int) -> None:
+        async with self._lock:
+            pending = self.pending_messages.get(channel_id)
+            if pending is None or message_id not in pending:
+                return
+            pending.remove(message_id)
+            if not pending:
+                del self.pending_messages[channel_id]
+            self._write_locked()
 
     async def cursor(self, channel_id: int) -> int | None:
         async with self._lock:
@@ -175,6 +210,12 @@ class StateStore:
                     for old_message_id in sorted(self.approved_messages)[:excess]:
                         del self.approved_messages[old_message_id]
                 changed = True
+            pending = self.pending_messages.get(channel_id)
+            if pending is not None and message_id in pending:
+                pending.remove(message_id)
+                if not pending:
+                    del self.pending_messages[channel_id]
+                changed = True
             current = self.cursors.get(channel_id, 0)
             if message_id > current:
                 self.cursors[channel_id] = message_id
@@ -185,13 +226,17 @@ class StateStore:
     def _write_locked(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload: dict[str, Any] = {
-            "version": 2,
+            "version": 3,
             "channel_cursors": {
                 str(channel_id): str(message_id)
                 for channel_id, message_id in sorted(self.cursors.items())
             },
             "thread_titles": {
                 str(thread_id): title for thread_id, title in sorted(self.thread_titles.items())
+            },
+            "pending_messages": {
+                str(channel_id): [str(message_id) for message_id in sorted(message_ids)]
+                for channel_id, message_ids in sorted(self.pending_messages.items())
             },
             "approved_messages": {
                 str(message_id): {

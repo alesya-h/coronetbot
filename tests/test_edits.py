@@ -7,7 +7,7 @@ import pytest
 from coronetbot.bot import CoronetClient, PreparedAttachments
 from coronetbot.config import Config
 from coronetbot.models import ModerationResult, Violation
-from coronetbot.moderator import ModerationContext
+from coronetbot.moderator import ModerationContext, ModerationServiceError
 from coronetbot.state import ApprovedMessage
 
 
@@ -29,6 +29,42 @@ def _client(tmp_path: Path) -> CoronetClient:
         max_image_bytes=8_000_000,
     )
     return CoronetClient(config, "Be civil")
+
+
+async def test_classification_failure_is_queued_for_backfill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    author = SimpleNamespace(id=20, bot=False)
+    channel = SimpleNamespace(id=10, name="general")
+    message = SimpleNamespace(
+        id=30,
+        channel=channel,
+        author=author,
+        guild=SimpleNamespace(id=client.config.guild_id),
+        content="draft",
+        attachments=[],
+        webhook_id=None,
+        jump_url="https://discord.test/message",
+    )
+    client.state = SimpleNamespace(
+        seen=AsyncMock(return_value=False),
+        mark_pending=AsyncMock(),
+    )
+    client.moderator = SimpleNamespace(
+        moderate=AsyncMock(side_effect=ModerationServiceError("failed"))
+    )
+
+    async def context(_message: object) -> tuple[ModerationContext, PreparedAttachments]:
+        return ModerationContext(), PreparedAttachments([], (), ())
+
+    monkeypatch.setattr(client, "_moderation_context", context)
+    monkeypatch.setattr(client, "_audit", AsyncMock(return_value=True))
+
+    await client._process_message_serial(message, source="live")
+
+    client.state.mark_pending.assert_awaited_once_with(10, 30)
 
 
 @pytest.mark.parametrize("is_latest", [True, False])

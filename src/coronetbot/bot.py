@@ -241,10 +241,14 @@ class CoronetClient(discord.Client):
                 f"**Attachments**\n{self._attachments_audit_listing(starter_attachments)}"
             )
             if not await self._audit(received):
+                if starter is not None:
+                    await self.state.mark_pending(thread.id, starter.id)
                 return False
             if prepared.metadata and not await self._audit(
                 self._attachment_analysis_audit("thread", thread.id, prepared)
             ):
+                if starter is not None:
+                    await self.state.mark_pending(thread.id, starter.id)
                 return False
             if prepared.unavailable_images:
                 if await self._audit(
@@ -260,11 +264,12 @@ class CoronetClient(discord.Client):
                 )
             except ModerationServiceError:
                 LOG.exception("Thread-title moderation unavailable (thread=%s)", thread.id)
-                if await self._audit(
+                await self._audit(
                     f"**Thread-title judgement** — thread `{thread.id}`\n"
                     "ERROR — classifier unavailable; failed open."
-                ):
-                    await self.state.mark_thread_title(thread.id, thread.name)
+                )
+                if starter is not None:
+                    await self.state.mark_pending(thread.id, starter.id)
                 return False
 
             if result.allowed:
@@ -278,6 +283,8 @@ class CoronetClient(discord.Client):
                     f"**Thread-title judgement** — thread `{thread.id}`\n"
                     f"ALLOWED — no rules violated.\nBot response: {bot_response}"
                 ):
+                    if starter is not None:
+                        await self.state.mark_pending(thread.id, starter.id)
                     return False
 
                 prefix_dm_status = "not needed"
@@ -316,6 +323,8 @@ class CoronetClient(discord.Client):
                         "ERROR — blocked title edit, but participant messages could not be "
                         "preserved; failed open."
                     )
+                    if starter is not None:
+                        await self.state.mark_pending(thread.id, starter.id)
                     return False
                 participant_notices = collected
 
@@ -324,6 +333,8 @@ class CoronetClient(discord.Client):
                 f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
                 f"**Bot response (removal DM)**\n{quote(notice)}"
             ):
+                if starter is not None:
+                    await self.state.mark_pending(thread.id, starter.id)
                 return False
             for participant, participant_notice in participant_notices:
                 if not await self._audit(
@@ -331,6 +342,8 @@ class CoronetClient(discord.Client):
                     f"Recipient: `{participant}` (`{participant.id}`)\n\n"
                     f"**Bot response (DM)**\n{quote(participant_notice)}"
                 ):
+                    if starter is not None:
+                        await self.state.mark_pending(thread.id, starter.id)
                     return False
 
             dm_status = "not sent; author unavailable"
@@ -374,16 +387,20 @@ class CoronetClient(discord.Client):
                 delete_status = "thread deletion failed"
                 LOG.exception("Could not delete rule-breaking thread %s", thread.id)
 
-            if await self._audit(
+            actions_audited = await self._audit(
                 f"**Thread-title actions** — thread `{thread.id}`\n"
                 f"Owner DM delivery: **{dm_status}**\n"
                 f"Participant preservation DMs: **{participant_dm_sent}/"
                 f"{len(participant_notices)} sent**\n"
                 f"Deletion: **{delete_status}**"
-            ):
-                await self.state.mark_thread_title(thread.id, thread.name)
-                if starter is not None and starter.id == thread.id:
-                    await self.state.mark_processed(thread.id, starter.id)
+            )
+            if deleted:
+                if actions_audited:
+                    await self.state.mark_thread_title(thread.id, thread.name)
+                    if starter is not None and starter.id == thread.id:
+                        await self.state.mark_processed(thread.id, starter.id)
+            elif starter is not None:
+                await self.state.mark_pending(thread.id, starter.id)
             return deleted
 
     async def _process_message(self, message: discord.Message, *, source: str) -> None:
@@ -401,6 +418,7 @@ class CoronetClient(discord.Client):
 
         if not await self._audit(self._received_audit(message, source=source)):
             LOG.error("Audit unavailable; message left intact (message=%s)", message.id)
+            await self.state.mark_pending(message.channel.id, message.id)
             return
 
         context, prepared = await self._moderation_context(message)
@@ -410,6 +428,7 @@ class CoronetClient(discord.Client):
             LOG.error(
                 "Attachment analysis could not be audited; message left intact (%s)", message.id
             )
+            await self.state.mark_pending(message.channel.id, message.id)
             return
         if prepared.unavailable_images:
             if await self._audit(
@@ -421,18 +440,21 @@ class CoronetClient(discord.Client):
                 await self.state.mark_processed(message.channel.id, message.id)
             return
         if not message.content.strip() and context.proposed_title is None and not prepared.images:
-            if await self._audit(
+            judgement_audited = await self._audit(
                 self._judgement_audit(
                     message,
                     "ALLOWED — no textual or supported image content; other attachments "
                     "were logged but not analysed.",
                 )
-            ):
+            )
+            if judgement_audited:
                 await self.state.mark_processed(
                     message.channel.id,
                     message.id,
                     approved=self._approved_from_message(message),
                 )
+            else:
+                await self.state.mark_pending(message.channel.id, message.id)
             return
 
         try:
@@ -446,19 +468,24 @@ class CoronetClient(discord.Client):
                 message.channel.id,
                 message.id,
             )
-            if await self._audit(
+            await self._audit(
                 self._judgement_audit(message, "ERROR — classifier unavailable; failed open.")
-            ):
-                await self.state.mark_processed(message.channel.id, message.id)
+            )
+            await self.state.mark_pending(message.channel.id, message.id)
             return
 
         if result.allowed:
-            if await self._audit(self._judgement_audit(message, "ALLOWED — no rules violated.")):
+            judgement_audited = await self._audit(
+                self._judgement_audit(message, "ALLOWED — no rules violated.")
+            )
+            if judgement_audited:
                 await self.state.mark_processed(
                     message.channel.id,
                     message.id,
                     approved=self._approved_from_message(message),
                 )
+            else:
+                await self.state.mark_pending(message.channel.id, message.id)
             return
 
         channel_name = getattr(message.channel, "name", "unknown")
@@ -470,6 +497,7 @@ class CoronetClient(discord.Client):
                 "Could not audit blocked decision; message left intact (message=%s)",
                 message.id,
             )
+            await self.state.mark_pending(message.channel.id, message.id)
             return
 
         dm_status = "sent"
@@ -490,11 +518,13 @@ class CoronetClient(discord.Client):
             message.channel, discord.Thread
         )
         delete_status = "thread deleted" if deletes_thread else "message deleted"
+        deleted = False
         try:
             if deletes_thread:
                 await message.channel.delete(reason="CoronetBot moderation decision")
             else:
                 await message.delete()
+            deleted = True
             LOG.info(
                 "Deleted rule-breaking %s (guild=%s channel=%s message=%s user=%s rules=%s)",
                 "thread" if deletes_thread else "message",
@@ -516,11 +546,15 @@ class CoronetClient(discord.Client):
                 message.id,
             )
 
-        if await self._audit(
+        action_audited = await self._audit(
             f"**Moderation actions** — message `{message.id}`\n"
             f"DM delivery: **{dm_status}**\nDeletion: **{delete_status}**"
-        ):
-            await self.state.mark_processed(message.channel.id, message.id)
+        )
+        if deleted:
+            if action_audited:
+                await self.state.mark_processed(message.channel.id, message.id)
+        else:
+            await self.state.mark_pending(message.channel.id, message.id)
 
     async def _process_message_edit(
         self,
@@ -1018,6 +1052,14 @@ class CoronetClient(discord.Client):
             cursor = await self.state.cursor(channel.id)
             after = discord.Object(id=cursor) if cursor is not None else cutoff
             try:
+                for message_id in await self.state.pending(channel.id):
+                    message = await self._fetch_message(channel, message_id)
+                    if message is None or not self._message_in_scope(message):
+                        await self.state.clear_pending(channel.id, message_id)
+                        continue
+                    await self._process_message(message, source="backfill_retry")
+                    processed += 1
+
                 # Message-created chat threads and forum posts expose their title only
                 # through the thread container. Fetch the starter explicitly because
                 # thread.history() does not consistently include it.

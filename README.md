@@ -126,10 +126,12 @@ SDK request may additionally use `CB_LLM_RETRIES`. Keep concurrency conservative
 ChatGPT subscription limits differ from API limits.
 
 The bot stores the highest processed message ID per channel, a hash of each reviewed
-thread title, and up to 5,000 recent approved message versions in `CB_STATE_PATH`. Approved
-versions contain message text and attachment IDs/names so later edits can be compared and
-the pre-edit version can be preserved. Protect this state file as private moderation data.
-On startup it fetches and processes visible messages newer
+thread title, pending failed message IDs, and up to 5,000 recent approved message versions
+in `CB_STATE_PATH`. Approved versions contain message text and attachment IDs/names so later
+edits can be compared and the pre-edit version can be preserved. Protect this state file as
+private moderation data. Messages left in place after transient moderation/audit/deletion
+failures are queued independently of channel cursors and explicitly retried during startup
+backfill. On startup it also fetches and processes visible messages newer
 than that cursor and reviews active titles that are new or renamed. For channels with no
 cursor yet, it processes visible recent history up to `CB_BACKFILL_LOOKBACK_SECONDS` old;
 set this to `0` before a first production launch if you want to start from a clean
