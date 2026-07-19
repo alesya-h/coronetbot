@@ -10,3 +10,4 @@ __pycache__/
 dist/
 .env.prod
 /DEPLOYMENT.md
+/exports/
