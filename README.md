@@ -194,22 +194,14 @@ rules or environment variables.
 
 ## Behaviour
 
-A removal DM follows this structure (split across messages when Discord's 2,000-character
-limit requires it):
+Removal and `/validate` feedback is split into mobile-copy-friendly messages. Explanations
+and labels are separate from copyable content; each suggested revision and original draft
+is sent as its own plain-text message (and split further only when Discord's 2,000-character
+limit makes that unavoidable). The sequence is:
 
-> Your message in **#general** was removed.
->
-> **Original draft:**
-> > complete original message
->
-> **Reasons:**
-> • **Personal attack:** “dishonest idiot”  
->   Criticises the person rather than their conduct.
->
-> **Suggested revision:**
-> > The reported figures do not appear to match the payment records.  
-> > Could someone review and clarify the discrepancy?
->
-> You can copy and revise your original draft above. Return to the server and use
-> `/validate` in the channel or thread where you intend to post. Use `/rules` in the
-> server to see the active rules.
+1. Removal status and reasons
+2. “Suggested revision — copy the next message”
+3. The plain suggested revision
+4. “Original draft — copy the next message”
+5. The plain original draft
+6. Instructions for revising, `/validate`, and `/rules`

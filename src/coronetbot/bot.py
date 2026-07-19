@@ -22,6 +22,7 @@ from .formatting import (
     quote,
     reasons,
     removal_notice,
+    response_for_audit,
     thread_deletion_participant_notice,
     title_prefix_notice,
     validation_notice,
@@ -278,7 +279,9 @@ class CoronetClient(discord.Client):
                     is_forum=is_forum,
                     recommended_prefix=result.title_prefix_advisory,
                 )
-                bot_response = f"\n{quote(prefix_reminder)}" if prefix_reminder else " None."
+                bot_response = (
+                    f"\n{response_for_audit(prefix_reminder)}" if prefix_reminder else " None."
+                )
                 if not await self._audit(
                     f"**Thread-title judgement** — thread `{thread.id}`\n"
                     f"ALLOWED — no rules violated.\nBot response: {bot_response}"
@@ -293,10 +296,11 @@ class CoronetClient(discord.Client):
                     if author is not None:
                         prefix_dm_status = "sent"
                         try:
-                            for part in chunks(prefix_reminder):
-                                await author.send(
-                                    part, allowed_mentions=discord.AllowedMentions.none()
-                                )
+                            for response_part in prefix_reminder:
+                                for part in chunks(response_part):
+                                    await author.send(
+                                        part, allowed_mentions=discord.AllowedMentions.none()
+                                    )
                         except discord.HTTPException:
                             prefix_dm_status = "failed"
                     await self._audit(
@@ -314,7 +318,7 @@ class CoronetClient(discord.Client):
                 return False
 
             notice = removal_notice(parent_name, original_draft, result)
-            participant_notices: list[tuple[discord.abc.User, str]] = []
+            participant_notices: list[tuple[discord.abc.User, tuple[str, ...]]] = []
             if is_title_edit:
                 collected = await self._thread_participant_notices(thread)
                 if collected is None:
@@ -331,7 +335,7 @@ class CoronetClient(discord.Client):
             if not await self._audit(
                 f"**Thread-title judgement** — thread `{thread.id}`\n"
                 f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
-                f"**Bot response (removal DM)**\n{quote(notice)}"
+                f"**Bot response (removal DM)**\n{response_for_audit(notice)}"
             ):
                 if starter is not None:
                     await self.state.mark_pending(thread.id, starter.id)
@@ -340,7 +344,7 @@ class CoronetClient(discord.Client):
                 if not await self._audit(
                     f"**Thread-deletion participant notification** — thread `{thread.id}`\n"
                     f"Recipient: `{participant}` (`{participant.id}`)\n\n"
-                    f"**Bot response (DM)**\n{quote(participant_notice)}"
+                    f"**Bot response (DM)**\n{response_for_audit(participant_notice)}"
                 ):
                     if starter is not None:
                         await self.state.mark_pending(thread.id, starter.id)
@@ -350,18 +354,20 @@ class CoronetClient(discord.Client):
             if author is not None:
                 dm_status = "sent"
                 try:
-                    for part in chunks(notice):
-                        await author.send(part, allowed_mentions=discord.AllowedMentions.none())
+                    for response_part in notice:
+                        for part in chunks(response_part):
+                            await author.send(part, allowed_mentions=discord.AllowedMentions.none())
                 except discord.HTTPException:
                     dm_status = "failed"
 
             participant_dm_sent = 0
             for participant, participant_notice in participant_notices:
                 try:
-                    for part in chunks(participant_notice):
-                        await participant.send(
-                            part, allowed_mentions=discord.AllowedMentions.none()
-                        )
+                    for response_part in participant_notice:
+                        for part in chunks(response_part):
+                            await participant.send(
+                                part, allowed_mentions=discord.AllowedMentions.none()
+                            )
                     participant_dm_sent += 1
                 except discord.HTTPException:
                     LOG.warning(
@@ -502,8 +508,9 @@ class CoronetClient(discord.Client):
 
         dm_status = "sent"
         try:
-            for part in chunks(notice):
-                await message.author.send(part, allowed_mentions=discord.AllowedMentions.none())
+            for response_part in notice:
+                for part in chunks(response_part):
+                    await message.author.send(part, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
             dm_status = "failed"
             LOG.warning(
@@ -630,17 +637,20 @@ class CoronetClient(discord.Client):
         edited_draft = self._original_draft(message, context)
         approved_draft = self._approved_draft(approved, message.channel)
         removal = removal_notice(channel_name, edited_draft, result)
-        public_notice = None
+        public_notice: tuple[str, ...] | None = None
         if not is_latest:
             author_name = discord.utils.escape_markdown(message.author.display_name)
             public_notice = edited_message_public_notice(author_name, approved_draft)
         decision = (
             f"**Edit moderation judgement** — message `{message.id}`\n"
             f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
-            f"**Bot response (removal DM)**\n{quote(removal)}"
+            f"**Bot response (removal DM)**\n{response_for_audit(removal)}"
         )
         if public_notice is not None:
-            decision += f"\n\n**Bot response (public continuity notice)**\n{quote(public_notice)}"
+            decision += (
+                "\n\n**Bot response (public continuity notice)**\n"
+                f"{response_for_audit(public_notice)}"
+            )
         if not await self._audit(decision):
             return
 
@@ -657,8 +667,9 @@ class CoronetClient(discord.Client):
 
         dm_status = "sent"
         try:
-            for part in chunks(removal):
-                await message.author.send(part, allowed_mentions=discord.AllowedMentions.none())
+            for response_part in removal:
+                for part in chunks(response_part):
+                    await message.author.send(part, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
             dm_status = "failed"
 
@@ -705,14 +716,15 @@ class CoronetClient(discord.Client):
     async def _send_public_notice(
         self,
         channel: discord.abc.Messageable,
-        text: str,
+        response_parts: tuple[str, ...],
     ) -> list[discord.Message] | None:
         sent: list[discord.Message] = []
         try:
-            for part in chunks(text):
-                sent.append(
-                    await channel.send(part, allowed_mentions=discord.AllowedMentions.none())
-                )
+            for response_part in response_parts:
+                for part in chunks(response_part):
+                    sent.append(
+                        await channel.send(part, allowed_mentions=discord.AllowedMentions.none())
+                    )
             return sent
         except discord.HTTPException:
             for message in sent:
@@ -736,7 +748,7 @@ class CoronetClient(discord.Client):
         *,
         is_forum: bool,
         recommended_prefix: str | None,
-    ) -> str | None:
+    ) -> tuple[str, ...] | None:
         if not is_forum:
             return None
         has_conventional_prefix = re.match(r"^[CQ]: ", title) is not None
@@ -932,7 +944,7 @@ class CoronetClient(discord.Client):
     async def _thread_participant_notices(
         self,
         thread: discord.Thread,
-    ) -> list[tuple[discord.abc.User, str]] | None:
+    ) -> list[tuple[discord.abc.User, tuple[str, ...]]] | None:
         by_author: dict[int, tuple[discord.abc.User, list[str]]] = {}
         try:
             async for message in thread.history(limit=None, oldest_first=True):
@@ -1153,11 +1165,15 @@ class CoronetClient(discord.Client):
         )
 
     @staticmethod
-    def _blocked_audit(message: discord.Message, result: ModerationResult, notice: str) -> str:
+    def _blocked_audit(
+        message: discord.Message,
+        result: ModerationResult,
+        notice: tuple[str, ...],
+    ) -> str:
         return (
             f"**Moderation judgement** — message `{message.id}`\n"
             f"**BLOCKED**\n\n**Reasons**\n{reasons(result)}\n\n"
-            f"**Bot response (removal DM)**\n{quote(notice)}"
+            f"**Bot response (removal DM)**\n{response_for_audit(notice)}"
         )
 
     def _interaction_context(self, interaction: discord.Interaction) -> str:
@@ -1272,10 +1288,10 @@ class CoronetClient(discord.Client):
 
             try:
                 if not text.strip() and image is None:
-                    output = "⚠️ Provide draft text, an image, or both."
+                    output = ("⚠️ Provide draft text, an image, or both.",)
                     judgement = "NOT ASSESSED — empty draft."
                 elif prepared.unavailable_images:
-                    output = "⚠️ The image could not be analysed, so the draft was not assessed."
+                    output = ("⚠️ The image could not be analysed, so the draft was not assessed.",)
                     judgement = "ERROR — image attachment unavailable; failed open."
                 else:
                     context = await self._validation_context(interaction, prepared)
@@ -1286,18 +1302,18 @@ class CoronetClient(discord.Client):
                     judgement = "ALLOWED" if result.allowed else f"BLOCKED\n\n{reasons(result)}"
             except ModerationServiceError:
                 LOG.exception("Validation unavailable (user=%s)", interaction.user.id)
-                output = "⚠️ Validation is temporarily unavailable. Your draft was not assessed."
+                output = ("⚠️ Validation is temporarily unavailable. Your draft was not assessed.",)
                 judgement = "ERROR — classifier unavailable."
 
             response_audit = (
                 "**Validation judgement and bot response**\n"
                 f"User: `{interaction.user.id}`\nJudgement: **{judgement}**\n\n"
-                f"**Bot response**\n{quote(output)}"
+                f"**Bot response**\n{response_for_audit(output)}"
             )
             if not await self._audit(response_audit):
                 output = (
                     "⚠️ Validation completed, but the response could not be audited. "
-                    "Try again later."
+                    "Try again later.",
                 )
             await _send_followups(interaction, output)
 
@@ -1332,11 +1348,16 @@ class CoronetClient(discord.Client):
             await interaction.response.send_message(output, ephemeral=True)
 
 
-async def _send_followups(interaction: discord.Interaction, text: str) -> None:
-    for part in chunks(text):
-        await interaction.followup.send(
-            part, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
-        )
+async def _send_followups(
+    interaction: discord.Interaction,
+    response: str | Sequence[str],
+) -> None:
+    response_parts = (response,) if isinstance(response, str) else response
+    for response_part in response_parts:
+        for part in chunks(response_part):
+            await interaction.followup.send(
+                part, ephemeral=True, allowed_mentions=discord.AllowedMentions.none()
+            )
 
 
 def run() -> None:

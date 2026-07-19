@@ -29,15 +29,20 @@ def test_removal_notice_contains_required_sections() -> None:
         suggested_revision="I disagree with the decision.",
     )
     notice = removal_notice("general", "You idiot", result)
-    assert "#general" in notice
-    assert "Original draft" in notice
-    assert "Reasons" in notice
-    assert "Suggested revision" in notice
-    assert "/validate" in notice
-    assert "/rules" in notice
-    assert "Return to the server" in notice
-    assert "`/validate` here" not in notice
-    assert "bot-moderation-audit" not in notice
+    combined = "\n".join(notice)
+    assert "#general" in combined
+    assert "Original draft" in combined
+    assert "Reasons" in combined
+    assert "Suggested revision" in combined
+    assert "/validate" in combined
+    assert "/rules" in combined
+    assert "Return to the server" in combined
+    assert "`/validate` here" not in combined
+    assert "bot-moderation-audit" not in combined
+    assert notice[2] == "I disagree with the decision."
+    assert notice[4] == "You idiot"
+    assert not notice[2].startswith(">")
+    assert not notice[4].startswith(">")
 
 
 def test_image_reason_names_the_attachment() -> None:
@@ -58,26 +63,29 @@ def test_image_reason_names_the_attachment() -> None:
 
 def test_title_prefix_notice_leaves_post_in_place() -> None:
     notice = title_prefix_notice("A question without a prefix", "Q: ")
-    assert "left in place" in notice
-    assert "`Q: `" in notice
-    assert "not a moderation violation" in notice
+    assert "left in place" in notice[0]
+    assert "`Q: `" in notice[0]
+    assert "not a moderation violation" in notice[0]
+    assert notice[1] == "A question without a prefix"
 
 
 def test_edit_public_notice_preserves_approved_version() -> None:
     notice = edited_message_public_notice("Alesya", "Previously approved\n\npost")
-    assert "from **Alesya**" in notice
-    assert "edited version did not comply" in notice
-    assert quote("Previously approved\n\npost") in notice
+    assert "from **Alesya**" in notice[0]
+    assert "edited version did not comply" in notice[0]
+    assert notice[1] == "Previously approved\n\npost"
 
 
 def test_thread_deletion_notice_preserves_participant_messages() -> None:
     notice = thread_deletion_participant_notice(["first", "second"])
-    assert "original author" in notice
-    assert "triggering deletion" in notice
-    assert "**Your message 1:**\n> first" in notice
-    assert "**Your message 2:**\n> second" in notice
+    assert "original author" in notice[0]
+    assert "triggering deletion" in notice[0]
+    assert notice[1] == "**Your message 1 — copy the next message:**"
+    assert notice[2] == "first"
+    assert notice[3] == "**Your message 2 — copy the next message:**"
+    assert notice[4] == "second"
 
 
 def test_validation_notice_does_not_expose_internal_audit_channel() -> None:
     allowed = ModerationResult(allowed=True)
-    assert "bot-moderation-audit" not in validation_notice("draft", allowed)
+    assert "bot-moderation-audit" not in "\n".join(validation_notice("draft", allowed))

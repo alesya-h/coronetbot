@@ -125,8 +125,9 @@ async def test_blocked_edit_only_posts_continuity_notice_when_not_latest(
         send_public.assert_not_awaited()
     else:
         send_public.assert_awaited_once()
-        assert "approved original" in send_public.await_args.args[1]
-        assert "Alesya" in send_public.await_args.args[1]
+        public_parts = send_public.await_args.args[1]
+        assert public_parts[1] == "approved original"
+        assert "Alesya" in public_parts[0]
 
 
 async def test_thread_deletion_notice_groups_and_preserves_participant_messages(

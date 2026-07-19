@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from .models import ModerationResult
 
@@ -26,63 +26,73 @@ def reasons(result: ModerationResult) -> str:
     return "\n\n".join(entries)
 
 
-def removal_notice(channel: str, original: str, result: ModerationResult) -> str:
-    assert not result.allowed and result.suggested_revision is not None
-    return (
-        f"Your message in **#{channel}** was removed.\n\n"
-        f"**Original draft:**\n{quote(original)}\n\n"
-        f"**Reasons:**\n{reasons(result)}\n\n"
-        f"**Suggested revision:**\n{quote(result.suggested_revision)}\n\n"
-        "You can copy and revise your original draft above. Return to the server and use "
-        "`/validate` in the channel or thread where you intend to post; that gives the bot "
-        "the relevant surrounding context and helps avoid triggering slow-mode before a "
-        "message is removed. Use `/rules` in the server to see the moderation policy."
+def response_for_audit(parts: Sequence[str]) -> str:
+    return "\n\n".join(
+        f"**Message {index}:**\n{quote(part)}" for index, part in enumerate(parts, start=1)
     )
 
 
-def title_prefix_notice(title: str, recommended_prefix: str | None) -> str:
+def removal_notice(channel: str, original: str, result: ModerationResult) -> tuple[str, ...]:
+    assert not result.allowed and result.suggested_revision is not None
+    return (
+        f"Your message in **#{channel}** was removed.\n\n**Reasons:**\n{reasons(result)}",
+        "**Suggested revision — copy the next message:**",
+        result.suggested_revision,
+        "**Original draft — copy the next message:**",
+        original,
+        "You can revise either version above. Return to the server and use `/validate` in "
+        "the channel or thread where you intend to post; that gives the bot the relevant "
+        "surrounding context and helps avoid triggering slow-mode before a message is "
+        "removed. Use `/rules` in the server to see the moderation policy.",
+    )
+
+
+def title_prefix_notice(title: str, recommended_prefix: str | None) -> tuple[str, ...]:
     if recommended_prefix is None:
         instruction = "Please begin it with `C: ` for a claim or `Q: ` for a question."
     else:
         instruction = f"Please edit it to begin with `{recommended_prefix}`."
     return (
         "Your forum post has been left in place, but its title is missing or uses the wrong "
-        f"claim/question prefix.\n\n**Current title:**\n{quote(title)}\n\n{instruction} "
-        "The prefix is a forum-organising convention, not a moderation violation."
+        f"claim/question prefix. {instruction} The prefix is a forum-organising convention, "
+        "not a moderation violation.\n\n**Current title — copy the next message:**",
+        title,
     )
 
 
-def edited_message_public_notice(author: str, approved_version: str) -> str:
+def edited_message_public_notice(author: str, approved_version: str) -> tuple[str, ...]:
     return (
         f"A post from **{author}** was deleted because its author edited it and the edited "
         "version did not comply with the community standards.\n\n"
-        f"**Original post before the edit:**\n{quote(approved_version)}"
+        "**Original post before the edit — copy the next message:**",
+        approved_version,
     )
 
 
-def thread_deletion_participant_notice(messages: list[str]) -> str:
+def thread_deletion_participant_notice(messages: list[str]) -> tuple[str, ...]:
     label = "message" if len(messages) == 1 else "messages"
     verb = "has" if len(messages) == 1 else "have"
-    preserved = "\n\n".join(
-        f"**Your {label if len(messages) == 1 else f'message {index}'}:**\n{quote(message)}"
-        for index, message in enumerate(messages, start=1)
-    )
-    return (
+    parts = [
         "The original author of a thread you posted in edited its title into a version that "
         "does not comply with the community guidelines, regrettably triggering deletion "
-        f"of the thread you posted in. Your {label} {verb} been preserved below.\n\n"
-        f"{preserved}"
-    )
+        f"of the thread you posted in. Your {label} {verb} been preserved below."
+    ]
+    for index, message in enumerate(messages, start=1):
+        heading = "Your message" if len(messages) == 1 else f"Your message {index}"
+        parts.extend((f"**{heading} — copy the next message:**", message))
+    return tuple(parts)
 
 
-def validation_notice(original: str, result: ModerationResult) -> str:
+def validation_notice(original: str, result: ModerationResult) -> tuple[str, ...]:
     if result.allowed:
-        return "✅ This draft passes the current moderation rules."
+        return ("✅ This draft passes the current moderation rules.",)
     assert result.suggested_revision is not None
     return (
-        f"❌ This draft would be removed.\n\n**Reasons:**\n{reasons(result)}\n\n"
-        f"**Suggested revision:**\n{quote(result.suggested_revision)}\n\n"
-        f"**Original draft:**\n{quote(original)}"
+        f"❌ This draft would be removed.\n\n**Reasons:**\n{reasons(result)}",
+        "**Suggested revision — copy the next message:**",
+        result.suggested_revision,
+        "**Original draft — copy the next message:**",
+        original,
     )
 
 

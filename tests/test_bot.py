@@ -42,11 +42,11 @@ def test_forum_prefix_reminder_is_soft_and_handles_mismatches() -> None:
     missing = CoronetClient._title_prefix_reminder(
         "A question", is_forum=True, recommended_prefix="Q: "
     )
-    assert missing is not None and "left in place" in missing and "`Q: `" in missing
+    assert missing is not None and "left in place" in missing[0] and "`Q: `" in missing[0]
     mismatched = CoronetClient._title_prefix_reminder(
         "C: What happened?", is_forum=True, recommended_prefix="Q: "
     )
-    assert mismatched is not None and "`Q: `" in mismatched
+    assert mismatched is not None and "`Q: `" in mismatched[0]
     assert (
         CoronetClient._title_prefix_reminder(
             "A chat thread", is_forum=False, recommended_prefix="Q: "
