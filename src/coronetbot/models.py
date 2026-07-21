@@ -22,6 +22,7 @@ class ModerationResult:
     violations: tuple[Violation, ...] = ()
     suggested_revision: str | None = None
     title_prefix_advisory: str | None = None
+    advisory: str | None = None
 
     @classmethod
     def from_json(
@@ -75,12 +76,26 @@ class ModerationResult:
         if isinstance(revision, str):
             revision = revision.strip() or None
 
+        advisory = value.get("advisory")
+        if advisory is not None and not isinstance(advisory, str):
+            raise InvalidModerationResponse("'advisory' must be a string or null")
+        if isinstance(advisory, str):
+            advisory = advisory.strip() or None
+
         if value["allowed"]:
             if violations:
                 raise InvalidModerationResponse("allowed response contains violations")
-            return cls(allowed=True, title_prefix_advisory=title_prefix_advisory)
+            if revision is not None:
+                raise InvalidModerationResponse("allowed response contains suggested revision")
+            return cls(
+                allowed=True,
+                title_prefix_advisory=title_prefix_advisory,
+                advisory=advisory,
+            )
         if not violations:
             raise InvalidModerationResponse("blocked response contains no violations")
         if revision is None:
             raise InvalidModerationResponse("blocked response contains no suggested revision")
+        if advisory is not None:
+            raise InvalidModerationResponse("blocked response contains advisory")
         return cls(False, tuple(violations), revision, title_prefix_advisory)

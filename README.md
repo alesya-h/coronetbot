@@ -4,8 +4,9 @@ LLM-based moderation bot for the Coronet strata Discord community.
 
 For each new or edited message, reply, thread message, or forum post in the server, the
 bot checks text and supported image attachments against the configured rules. Allowed
-messages are left untouched. For a clear violation,
-the bot DMs the author with the original draft, reasons, and a suggested revision, then
+messages are left untouched; the bot may DM a clearly optional evidence suggestion without
+removing the message. For a clear violation, the bot DMs the author with the original draft,
+reasons, and a suggested revision, then
 deletes the public message. If classification or audit logging fails, the bot leaves the
 message in place.
 
@@ -31,12 +32,13 @@ is an exact substring of the proposed title/body and that blocked decisions incl
 a violation and a suggested revision. An invalid response leaves the message in place.
 
 Reviews include the channel type/name/description, forum title and root post, reply target,
-recent context, recent same-author messages, and attachment metadata when available. This
-lets the policy distinguish general chat, original `C:`/`Q:` forum posts, and scoped forum
-replies without treating quoted/contextual text as if the author wrote it. Supported image
-attachments are downloaded from Discord, signature-checked, and sent as ephemeral
-multimodal inputs so visible text and imagery can be assessed. Other attachment contents
-are not inferred when no extracted text is available.
+recent context, recent same-author messages, and attachment metadata when available. Exact
+same-server Discord links are resolved only when the author can access their target. Supported
+images from the proposed message, forum root, and resolved linked messages are downloaded,
+signature-checked, and sent as ephemeral multimodal inputs with authorship clearly marked.
+This lets the policy assess supplied evidence without treating quoted or contextual material
+as if the author wrote it. Other attachment contents are not inferred when no extracted text
+is available.
 
 ## Local setup
 

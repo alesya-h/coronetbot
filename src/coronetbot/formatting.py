@@ -32,6 +32,13 @@ def response_for_audit(parts: Sequence[str]) -> str:
     )
 
 
+def advisory_notice(channel: str, advisory: str) -> tuple[str, ...]:
+    return (
+        f"Your message in **#{channel}** was left in place. Optional suggestion: {advisory}\n\n"
+        "No action is required.",
+    )
+
+
 def removal_notice(channel: str, original: str, result: ModerationResult) -> tuple[str, ...]:
     assert not result.allowed and result.suggested_revision is not None
     return (
@@ -88,6 +95,11 @@ def thread_deletion_participant_notice(messages: list[str]) -> tuple[str, ...]:
 
 def validation_notice(original: str, result: ModerationResult) -> tuple[str, ...]:
     if result.allowed:
+        if result.advisory:
+            return (
+                "✅ This draft passes the current moderation rules.",
+                f"💡 **Optional suggestion:** {result.advisory}\n\nNo action is required.",
+            )
         return ("✅ This draft passes the current moderation rules.",)
     assert result.suggested_revision is not None
     return (

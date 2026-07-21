@@ -96,6 +96,30 @@ async def test_image_attachment_is_downloaded_and_prepared() -> None:
     assert "included" in prepared.metadata[0]["image_analysis"]
 
 
+async def test_context_image_is_labelled_and_not_treated_as_authored() -> None:
+    class Attachment:
+        filename = "evidence.png"
+        content_type = "image/png"
+        size = 12
+        url = "https://cdn.discord.test/evidence.png"
+
+        async def read(self, *, use_cached: bool) -> bytes:
+            assert use_cached
+            return b"\x89PNG\r\n\x1a\nrest"
+
+    client = SimpleNamespace(config=SimpleNamespace(max_images_per_message=4, max_image_bytes=100))
+    prepared = await CoronetClient._prepare_attachments(
+        client,
+        [Attachment()],
+        source="thread root 10",
+        authored=False,
+    )
+
+    assert prepared.images[0].filename == "thread root 10: evidence.png"
+    assert not prepared.images[0].authored
+    assert prepared.metadata[0]["source"] == "thread root 10"
+
+
 async def test_oversize_image_fails_preparation_without_download() -> None:
     class Attachment:
         filename = "huge.png"

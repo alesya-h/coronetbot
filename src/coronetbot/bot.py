@@ -17,6 +17,7 @@ from discord import app_commands
 from . import __version__
 from .config import Config
 from .formatting import (
+    advisory_notice,
     chunks,
     edited_message_public_notice,
     quote,
@@ -35,6 +36,11 @@ LOG = logging.getLogger(__name__)
 AUDIT_CHANNEL_NAME = "bot-moderation-audit"
 IGNORED_CATEGORY_IDS = {1491596963647324180}  # Committee internal
 IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+MAX_INTERNAL_LINKS = 5
+INTERNAL_LINK_RE = re.compile(
+    r"https://(?:(?:canary|ptb)\.)?discord(?:app)?\.com/channels/"
+    r"(?P<guild>\d+)/(?P<channel>\d+)(?:/(?P<message>\d+))?"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,6 +223,17 @@ class CoronetClient(discord.Client):
             prepared = await self._prepare_attachments(
                 starter.attachments if starter is not None else []
             )
+            linked_messages: list[dict[str, Any]] = []
+            if author is not None:
+                linked_messages, linked_prepared = await self._resolve_internal_links(
+                    body,
+                    author,
+                    image_budget=max(
+                        0,
+                        self.config.max_images_per_message - len(prepared.images),
+                    ),
+                )
+                prepared = self._combine_prepared(prepared, linked_prepared)
             context = ModerationContext(
                 channel_type="forum_post" if is_forum else "general_chat",
                 channel_name=parent_name,
@@ -226,9 +243,14 @@ class CoronetClient(discord.Client):
                 thread_root=body or None,
                 requested_action=self._requested_action(body),
                 proposed_title=thread.name,
+                linked_messages=linked_messages,
                 attachments=prepared.metadata,
                 cited_material_accessible=(
-                    True if prepared.images else False if prepared.metadata else None
+                    True
+                    if prepared.images or any(item.get("accessible") for item in linked_messages)
+                    else False
+                    if prepared.metadata or linked_messages
+                    else None
                 ),
             )
             draft_text = f"Title: {thread.name}" + (f"\n\n{body}" if body else "")
@@ -279,8 +301,17 @@ class CoronetClient(discord.Client):
                     is_forum=is_forum,
                     recommended_prefix=result.title_prefix_advisory,
                 )
+                advisory = (
+                    advisory_notice(parent_name, result.advisory) if result.advisory else None
+                )
+                response_parts = tuple(
+                    part
+                    for response in (prefix_reminder, advisory)
+                    if response is not None
+                    for part in response
+                )
                 bot_response = (
-                    f"\n{response_for_audit(prefix_reminder)}" if prefix_reminder else " None."
+                    f"\n{response_for_audit(response_parts)}" if response_parts else " None."
                 )
                 if not await self._audit(
                     f"**Thread-title judgement** — thread `{thread.id}`\n"
@@ -290,23 +321,26 @@ class CoronetClient(discord.Client):
                         await self.state.mark_pending(thread.id, starter.id)
                     return False
 
-                prefix_dm_status = "not needed"
-                if prefix_reminder is not None:
-                    prefix_dm_status = "not sent; author unavailable"
+                dm_status = "not needed"
+                if response_parts:
+                    dm_status = "not sent; author unavailable"
                     if author is not None:
-                        prefix_dm_status = "sent"
+                        dm_status = "sent"
                         try:
-                            for response_part in prefix_reminder:
+                            for response_part in response_parts:
                                 for part in chunks(response_part):
                                     await author.send(
                                         part, allowed_mentions=discord.AllowedMentions.none()
                                     )
                         except discord.HTTPException:
-                            prefix_dm_status = "failed"
-                    await self._audit(
-                        f"**Thread-title prefix reminder** — thread `{thread.id}`\n"
-                        f"DM delivery: **{prefix_dm_status}**\nThread: **left in place**"
-                    )
+                            dm_status = "failed"
+                    if not await self._audit(
+                        f"**Allowed thread feedback** — thread `{thread.id}`\n"
+                        f"DM delivery: **{dm_status}**\nThread: **left in place**"
+                    ):
+                        if starter is not None:
+                            await self.state.mark_pending(thread.id, starter.id)
+                        return False
 
                 await self.state.mark_thread_title(thread.id, thread.name)
                 if starter is not None:
@@ -481,17 +515,38 @@ class CoronetClient(discord.Client):
             return
 
         if result.allowed:
-            judgement_audited = await self._audit(
-                self._judgement_audit(message, "ALLOWED — no rules violated.")
+            advisory = (
+                advisory_notice(getattr(message.channel, "name", "unknown"), result.advisory)
+                if result.advisory
+                else None
             )
-            if judgement_audited:
-                await self.state.mark_processed(
-                    message.channel.id,
-                    message.id,
-                    approved=self._approved_from_message(message),
-                )
-            else:
+            judgement = "ALLOWED — no rules violated."
+            if not await self._audit(self._judgement_audit(message, judgement, response=advisory)):
                 await self.state.mark_pending(message.channel.id, message.id)
+                return
+
+            if advisory is not None:
+                dm_status = "sent"
+                try:
+                    for response_part in advisory:
+                        for part in chunks(response_part):
+                            await message.author.send(
+                                part, allowed_mentions=discord.AllowedMentions.none()
+                            )
+                except discord.HTTPException:
+                    dm_status = "failed"
+                if not await self._audit(
+                    f"**Optional advisory actions** — message `{message.id}`\n"
+                    f"DM delivery: **{dm_status}**\nMessage: **left in place**"
+                ):
+                    await self.state.mark_pending(message.channel.id, message.id)
+                    return
+
+            await self.state.mark_processed(
+                message.channel.id,
+                message.id,
+                approved=self._approved_from_message(message),
+            )
             return
 
         channel_name = getattr(message.channel, "name", "unknown")
@@ -606,10 +661,35 @@ class CoronetClient(discord.Client):
             return
 
         if result.allowed:
-            if await self._audit(
-                self._judgement_audit(message, "ALLOWED EDIT — no rules violated.")
+            advisory = (
+                advisory_notice(getattr(message.channel, "name", "unknown"), result.advisory)
+                if result.advisory
+                else None
+            )
+            if not await self._audit(
+                self._judgement_audit(
+                    message,
+                    "ALLOWED EDIT — no rules violated.",
+                    response=advisory,
+                )
             ):
-                await self.state.mark_approved(current)
+                return
+            if advisory is not None:
+                dm_status = "sent"
+                try:
+                    for response_part in advisory:
+                        for part in chunks(response_part):
+                            await message.author.send(
+                                part, allowed_mentions=discord.AllowedMentions.none()
+                            )
+                except discord.HTTPException:
+                    dm_status = "failed"
+                if not await self._audit(
+                    f"**Optional edit advisory actions** — message `{message.id}`\n"
+                    f"DM delivery: **{dm_status}**\nMessage: **left in place**"
+                ):
+                    return
+            await self.state.mark_approved(current)
             return
 
         if approved is None:
@@ -779,6 +859,11 @@ class CoronetClient(discord.Client):
         thread_root: str | None = None
         proposed_title: str | None = None
         forum_rules_version: str | None = None
+        starter: discord.Message | None = None
+
+        proposed = await self._prepare_attachments(message.attachments)
+        prepared_groups = [proposed]
+        remaining_images = max(0, self.config.max_images_per_message - len(proposed.images))
 
         if isinstance(channel, discord.Thread):
             thread_title = channel.name
@@ -794,16 +879,38 @@ class CoronetClient(discord.Client):
                     channel_type = "forum_reply"
                     starter = await self._fetch_message(channel, channel.id)
                     thread_root = starter.content if starter is not None else None
+                    if starter is not None:
+                        root_prepared = await self._prepare_attachments(
+                            starter.attachments,
+                            source=f"thread root {starter.id}",
+                            authored=False,
+                            max_images=remaining_images,
+                        )
+                        prepared_groups.append(root_prepared)
+                        remaining_images = max(0, remaining_images - len(root_prepared.images))
 
         reply_target: str | None = None
+        reply_target_approved: bool | None = None
         reference = message.reference
         if reference is not None and reference.message_id is not None:
             resolved = reference.resolved
+            target: discord.Message | None
             if isinstance(resolved, discord.Message):
-                reply_target = resolved.content
+                target = resolved
             else:
                 target = await self._fetch_message(channel, reference.message_id)
-                reply_target = target.content if target is not None else None
+            if target is not None:
+                reply_target = target.content
+                approved_target = await self.state.approved_message(target.id)
+                reply_target_approved = True if approved_target is not None else None
+
+        linked_messages, linked_prepared = await self._resolve_internal_links(
+            message.content,
+            message.author,
+            image_budget=remaining_images,
+        )
+        prepared_groups.append(linked_prepared)
+        prepared = self._combine_prepared(*prepared_groups)
 
         recent_messages: list[discord.Message] = []
         if hasattr(channel, "history"):
@@ -830,7 +937,6 @@ class CoronetClient(discord.Client):
             for previous in recent_messages
             if previous.author.id == message.author.id
         ]
-        prepared = await self._prepare_attachments(message.attachments)
 
         context = ModerationContext(
             channel_type=channel_type,
@@ -841,26 +947,153 @@ class CoronetClient(discord.Client):
             thread_root=thread_root,
             requested_action=self._requested_action(thread_root),
             reply_target=reply_target,
+            reply_target_direct=reply_target is not None,
+            reply_target_approved=reply_target_approved,
+            linked_messages=linked_messages,
             recent_context=recent_context,
             recent_same_author=recent_same_author,
             proposed_title=proposed_title,
             attachments=prepared.metadata,
             cited_material_accessible=(
-                True if prepared.images else False if prepared.metadata else None
+                True
+                if prepared.images or any(item.get("accessible") for item in linked_messages)
+                else False
+                if prepared.metadata or linked_messages
+                else None
             ),
         )
         return context, prepared
 
+    async def _resolve_internal_links(
+        self,
+        text: str,
+        viewer: discord.abc.User,
+        *,
+        image_budget: int,
+    ) -> tuple[list[dict[str, Any]], PreparedAttachments]:
+        records: list[dict[str, Any]] = []
+        prepared_groups: list[PreparedAttachments] = []
+        seen: set[tuple[int, int | None]] = set()
+        remaining = image_budget
+
+        for match in INTERNAL_LINK_RE.finditer(text):
+            if len(seen) >= MAX_INTERNAL_LINKS:
+                break
+            if int(match.group("guild")) != self.config.guild_id:
+                continue
+            channel_id = int(match.group("channel"))
+            supplied_message_id = match.group("message")
+            message_id = int(supplied_message_id) if supplied_message_id else None
+            key = (channel_id, message_id)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            channel = self.get_channel(channel_id)
+            if channel is None:
+                try:
+                    channel = await self.fetch_channel(channel_id)
+                except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                    records.append(
+                        {
+                            "url": match.group(0),
+                            "channel_id": str(channel_id),
+                            "message_id": str(message_id) if message_id else None,
+                            "accessible": False,
+                            "content": None,
+                        }
+                    )
+                    continue
+            if self._channel_is_ignored(channel) or (
+                self.audit_channel is not None and channel.id == self.audit_channel.id
+            ):
+                continue
+
+            guild = getattr(channel, "guild", None)
+            member = guild.get_member(viewer.id) if guild is not None else None
+            permissions_for = getattr(channel, "permissions_for", None)
+            if member is None or permissions_for is None:
+                continue
+            permissions = permissions_for(member)
+            if not permissions.view_channel or not permissions.read_message_history:
+                records.append(
+                    {
+                        "url": match.group(0),
+                        "channel_id": str(channel_id),
+                        "message_id": str(message_id) if message_id else None,
+                        "accessible": False,
+                        "content": None,
+                    }
+                )
+                continue
+
+            if message_id is None and isinstance(channel, discord.Thread):
+                message_id = channel.id
+            linked = await self._fetch_message(channel, message_id) if message_id else None
+            if linked is None:
+                records.append(
+                    {
+                        "url": match.group(0),
+                        "channel_id": str(channel_id),
+                        "message_id": str(message_id) if message_id else None,
+                        "accessible": True,
+                        "content": None,
+                    }
+                )
+                continue
+
+            source = f"linked message {linked.id}"
+            linked_prepared = await self._prepare_attachments(
+                linked.attachments,
+                source=source,
+                authored=False,
+                max_images=remaining,
+            )
+            remaining = max(0, remaining - len(linked_prepared.images))
+            prepared_groups.append(linked_prepared)
+            records.append(
+                {
+                    "url": match.group(0),
+                    "channel_id": str(channel_id),
+                    "message_id": str(linked.id),
+                    "accessible": True,
+                    "author_id": str(linked.author.id),
+                    "content": linked.content,
+                    "attachments": [item["filename"] for item in linked_prepared.metadata],
+                }
+            )
+
+        return records, self._combine_prepared(*prepared_groups)
+
+    @staticmethod
+    def _combine_prepared(*groups: PreparedAttachments) -> PreparedAttachments:
+        return PreparedAttachments(
+            [item for group in groups for item in group.metadata],
+            tuple(image for group in groups for image in group.images),
+            tuple(name for group in groups for name in group.unavailable_images),
+        )
+
     async def _prepare_attachments(
-        self, attachments: Sequence[discord.Attachment]
+        self,
+        attachments: Sequence[discord.Attachment],
+        *,
+        source: str = "proposed message",
+        authored: bool = True,
+        max_images: int | None = None,
     ) -> PreparedAttachments:
         metadata: list[dict[str, Any]] = []
         images: list[ModerationImage] = []
         unavailable: list[str] = []
+        image_limit = self.config.max_images_per_message if max_images is None else max_images
 
         for attachment in attachments:
+            moderation_filename = (
+                attachment.filename if authored else f"{source}: {attachment.filename}"
+            )
             item: dict[str, Any] = {
-                "filename": attachment.filename,
+                "filename": moderation_filename,
+                "original_filename": attachment.filename,
+                "source": source,
                 "content_type": attachment.content_type,
                 "size": attachment.size,
                 "source_url": attachment.url,
@@ -870,14 +1103,15 @@ class CoronetClient(discord.Client):
                 item["image_analysis"] = "not an image; content not analysed"
                 metadata.append(item)
                 continue
-            if len(images) >= self.config.max_images_per_message:
+            if len(images) >= image_limit:
                 item["image_analysis"] = "not analysed; image-count limit exceeded"
-                unavailable.append(attachment.filename)
+                if authored:
+                    unavailable.append(moderation_filename)
                 metadata.append(item)
                 continue
             if attachment.size > self.config.max_image_bytes:
                 item["image_analysis"] = "not analysed; image-size limit exceeded"
-                unavailable.append(attachment.filename)
+                unavailable.append(moderation_filename)
                 metadata.append(item)
                 continue
 
@@ -885,19 +1119,19 @@ class CoronetClient(discord.Client):
                 data = await attachment.read(use_cached=True)
             except (discord.HTTPException, OSError):
                 item["image_analysis"] = "not analysed; download failed"
-                unavailable.append(attachment.filename)
+                unavailable.append(moderation_filename)
                 metadata.append(item)
                 continue
 
             if len(data) > self.config.max_image_bytes:
                 item["image_analysis"] = "not analysed; downloaded image exceeded size limit"
-                unavailable.append(attachment.filename)
+                unavailable.append(moderation_filename)
                 metadata.append(item)
                 continue
             media_type = detected_image_media_type(data)
             if media_type is None:
                 item["image_analysis"] = "not analysed; unsupported or invalid image data"
-                unavailable.append(attachment.filename)
+                unavailable.append(moderation_filename)
                 metadata.append(item)
                 continue
 
@@ -905,9 +1139,10 @@ class CoronetClient(discord.Client):
             metadata.append(item)
             images.append(
                 ModerationImage(
-                    filename=attachment.filename,
+                    filename=moderation_filename,
                     media_type=media_type,
                     data=data,
+                    authored=authored,
                 )
             )
 
@@ -1159,9 +1394,16 @@ class CoronetClient(discord.Client):
         )
 
     @staticmethod
-    def _judgement_audit(message: discord.Message, judgement: str) -> str:
+    def _judgement_audit(
+        message: discord.Message,
+        judgement: str,
+        *,
+        response: tuple[str, ...] | None = None,
+    ) -> str:
+        bot_response = response_for_audit(response) if response else "None."
         return (
-            f"**Moderation judgement** — message `{message.id}`\n{judgement}\nBot response: None."
+            f"**Moderation judgement** — message `{message.id}`\n{judgement}\n"
+            f"Bot response: {bot_response}"
         )
 
     @staticmethod
@@ -1185,11 +1427,12 @@ class CoronetClient(discord.Client):
     async def _validation_context(
         self,
         interaction: discord.Interaction,
-        prepared: PreparedAttachments | None = None,
-    ) -> ModerationContext:
+        text: str,
+        prepared: PreparedAttachments,
+    ) -> tuple[ModerationContext, PreparedAttachments]:
         channel = interaction.channel
         if channel is None:
-            return ModerationContext(channel_name="DM")
+            return ModerationContext(channel_name="DM", attachments=prepared.metadata), prepared
 
         channel_name = getattr(channel, "name", "DM") or "DM"
         channel_description = getattr(channel, "topic", None) or ""
@@ -1197,6 +1440,8 @@ class CoronetClient(discord.Client):
         thread_title: str | None = None
         thread_root: str | None = None
         forum_rules_version: str | None = None
+        prepared_groups = [prepared]
+        remaining_images = max(0, self.config.max_images_per_message - len(prepared.images))
         if isinstance(channel, discord.Thread) and isinstance(channel.parent, discord.ForumChannel):
             channel_type = "forum_reply"
             channel_description = channel.parent.topic or ""
@@ -1204,6 +1449,23 @@ class CoronetClient(discord.Client):
             forum_rules_version = "forum-rules.md (integrated policy)"
             starter = await self._fetch_message(channel, channel.id)
             thread_root = starter.content if starter is not None else None
+            if starter is not None:
+                root_prepared = await self._prepare_attachments(
+                    starter.attachments,
+                    source=f"thread root {starter.id}",
+                    authored=False,
+                    max_images=remaining_images,
+                )
+                prepared_groups.append(root_prepared)
+                remaining_images = max(0, remaining_images - len(root_prepared.images))
+
+        linked_messages, linked_prepared = await self._resolve_internal_links(
+            text,
+            interaction.user,
+            image_budget=remaining_images,
+        )
+        prepared_groups.append(linked_prepared)
+        prepared = self._combine_prepared(*prepared_groups)
 
         recent_context: list[dict[str, str]] = []
         recent_same_author: list[str] = []
@@ -1222,24 +1484,28 @@ class CoronetClient(discord.Client):
             except discord.HTTPException:
                 LOG.warning("Could not fetch context for validation by %s", interaction.user.id)
 
-        return ModerationContext(
-            channel_type=channel_type,
-            channel_name=channel_name,
-            channel_description=channel_description,
-            forum_rules_version=forum_rules_version,
-            thread_title=thread_title,
-            thread_root=thread_root,
-            requested_action=self._requested_action(thread_root),
-            recent_context=recent_context,
-            recent_same_author=recent_same_author,
-            attachments=prepared.metadata if prepared else [],
-            cited_material_accessible=(
-                True
-                if prepared and prepared.images
-                else False
-                if prepared and prepared.metadata
-                else None
+        return (
+            ModerationContext(
+                channel_type=channel_type,
+                channel_name=channel_name,
+                channel_description=channel_description,
+                forum_rules_version=forum_rules_version,
+                thread_title=thread_title,
+                thread_root=thread_root,
+                requested_action=self._requested_action(thread_root),
+                linked_messages=linked_messages,
+                recent_context=recent_context,
+                recent_same_author=recent_same_author,
+                attachments=prepared.metadata,
+                cited_material_accessible=(
+                    True
+                    if prepared.images or any(item.get("accessible") for item in linked_messages)
+                    else False
+                    if prepared.metadata or linked_messages
+                    else None
+                ),
             ),
+            prepared,
         )
 
     def _register_commands(self) -> None:
@@ -1277,6 +1543,13 @@ class CoronetClient(discord.Client):
                     "⚠️ Validation is unavailable because audit logging is unavailable.",
                 )
                 return
+            context = ModerationContext(channel_name="DM")
+            if text.strip() or image is not None:
+                context, prepared = await self._validation_context(
+                    interaction,
+                    text,
+                    prepared,
+                )
             if prepared.metadata and not await self._audit(
                 self._attachment_analysis_audit("validation", interaction.id, prepared)
             ):
@@ -1294,7 +1567,6 @@ class CoronetClient(discord.Client):
                     output = ("⚠️ The image could not be analysed, so the draft was not assessed.",)
                     judgement = "ERROR — image attachment unavailable; failed open."
                 else:
-                    context = await self._validation_context(interaction, prepared)
                     result = await self.moderator.moderate(
                         text, context=context, images=prepared.images
                     )

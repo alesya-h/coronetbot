@@ -31,6 +31,51 @@ def _client(tmp_path: Path) -> CoronetClient:
     return CoronetClient(config, "Be civil")
 
 
+async def test_exact_accessible_internal_message_link_is_resolved(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    member = SimpleNamespace(id=20)
+    guild = SimpleNamespace(get_member=lambda user_id: member if user_id == 20 else None)
+    channel = SimpleNamespace(
+        id=40,
+        guild=guild,
+        category_id=None,
+        permissions_for=lambda _member: SimpleNamespace(
+            view_channel=True,
+            read_message_history=True,
+        ),
+    )
+    linked = SimpleNamespace(
+        id=50,
+        author=SimpleNamespace(id=21),
+        content="The canonical answer with exact dates.",
+        attachments=[],
+    )
+    monkeypatch.setattr(client, "get_channel", lambda channel_id: channel)
+    monkeypatch.setattr(client, "_fetch_message", AsyncMock(return_value=linked))
+
+    records, prepared = await client._resolve_internal_links(
+        "Answered at https://discord.com/channels/1526764377171296296/40/50",
+        member,
+        image_budget=4,
+    )
+
+    assert records == [
+        {
+            "url": "https://discord.com/channels/1526764377171296296/40/50",
+            "channel_id": "40",
+            "message_id": "50",
+            "accessible": True,
+            "author_id": "21",
+            "content": "The canonical answer with exact dates.",
+            "attachments": [],
+        }
+    ]
+    assert not prepared.images
+
+
 async def test_classification_failure_is_queued_for_backfill(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -65,6 +110,53 @@ async def test_classification_failure_is_queued_for_backfill(
     await client._process_message_serial(message, source="live")
 
     client.state.mark_pending.assert_awaited_once_with(10, 30)
+
+
+async def test_allowed_advisory_is_private_and_does_not_delete_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _client(tmp_path)
+    author = SimpleNamespace(id=20, bot=False, send=AsyncMock())
+    channel = SimpleNamespace(id=10, name="general")
+    message = SimpleNamespace(
+        id=30,
+        channel=channel,
+        author=author,
+        guild=SimpleNamespace(id=client.config.guild_id),
+        content="My current understanding is that the date is Friday.",
+        attachments=[],
+        webhook_id=None,
+        jump_url="https://discord.test/message",
+        delete=AsyncMock(),
+    )
+    client.state = SimpleNamespace(
+        seen=AsyncMock(return_value=False),
+        mark_pending=AsyncMock(),
+        mark_processed=AsyncMock(),
+    )
+    client.moderator = SimpleNamespace(
+        moderate=AsyncMock(
+            return_value=ModerationResult(
+                allowed=True,
+                advisory="A pinpoint source would help readers.",
+            )
+        )
+    )
+
+    async def context(_message: object) -> tuple[ModerationContext, PreparedAttachments]:
+        return ModerationContext(), PreparedAttachments([], (), ())
+
+    monkeypatch.setattr(client, "_moderation_context", context)
+    monkeypatch.setattr(client, "_audit", AsyncMock(return_value=True))
+
+    await client._process_message_serial(message, source="live")
+
+    message.delete.assert_not_awaited()
+    author.send.assert_awaited_once()
+    assert "left in place" in author.send.await_args.args[0]
+    client.state.mark_processed.assert_awaited_once()
+    client.state.mark_pending.assert_not_awaited()
 
 
 @pytest.mark.parametrize("is_latest", [True, False])

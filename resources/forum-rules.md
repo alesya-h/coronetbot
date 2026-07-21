@@ -16,7 +16,7 @@ When you are writing your post (regardless of whether it's a claim or a question
 3. Fire order superintendent/fire order OC project manager *vs* fire order contractor's project manager. GOOD: "superintendent", "OC-side project manager", "contractor's project manager". BAD: "project manager"
 
 Rules:
-1. No references to things outside the post. This means no "you've seen it", "find and read it yourself" and anything like that. We all feel like we've said same things many times over, and it is frustrating, but it's not working. For guidance, think that a new owner should be able to read your post, read the evidence attached and have full information to both assess the claim based on the evidence, as well as be able to independently acquire that evidence.
+1. No vague references such as "you've seen it" or "find it yourself". A new owner should be able to assess the claim and locate its evidence. A precise, accessible link to a Discord message or thread may identify the source or canonical answer without duplicating it; a short summary is helpful but optional. Do not claim unchecked linked content proves more than was supplied.
 2. No assumptions of and references to intent, motives, social relationships, and other unverifiable things. If you claim conflict of interest, please submit that as a post and attach evidence. We are frustrated with each other, it is natural to see the other side as unreasonable, but for this conversation to work we must keep that frustration to ourselves (myself included).
 3. Posts that do not meet these substantive requirements will be returned for editing. Optional labels, commentary, and requested actions are not required for approval.
 

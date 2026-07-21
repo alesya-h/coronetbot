@@ -43,6 +43,7 @@ async def test_codex_backend_uses_structured_ephemeral_request(
                 violations=[],
                 suggested_revision=None,
                 title_prefix_advisory=None,
+                advisory=None,
             )
             return SimpleNamespace(output_parsed=parsed)
 
@@ -81,6 +82,7 @@ async def test_image_is_sent_as_ephemeral_multimodal_input(
                 violations=[],
                 suggested_revision=None,
                 title_prefix_advisory=None,
+                advisory=None,
             )
             return SimpleNamespace(output_parsed=parsed)
 
@@ -92,7 +94,15 @@ async def test_image_is_sent_as_ephemeral_multimodal_input(
     monkeypatch.setattr(moderator, "_new_client", new_client)
     result = await moderator.moderate(
         "See attached",
-        images=(ModerationImage("proof.png", "image/png", b"png bytes"),),
+        images=(
+            ModerationImage("proof.png", "image/png", b"png bytes"),
+            ModerationImage(
+                "thread root 10: root.png",
+                "image/png",
+                b"root bytes",
+                authored=False,
+            ),
+        ),
     )
 
     assert result.allowed
@@ -103,6 +113,8 @@ async def test_image_is_sent_as_ephemeral_multimodal_input(
     assert content[1]["text"].endswith("proof.png")
     assert content[2]["type"] == "input_image"
     assert content[2]["image_url"].startswith("data:image/png;base64,")
+    assert content[3]["text"].startswith("Contextual evidence image")
+    assert content[4]["type"] == "input_image"
     assert captured["store"] is False
 
 
@@ -122,6 +134,7 @@ async def test_invalid_response_is_retried_with_a_fresh_client(
                 violations=[],
                 suggested_revision=None,
                 title_prefix_advisory=None,
+                advisory=None,
             )
             return SimpleNamespace(output_parsed=parsed)
 
@@ -173,6 +186,7 @@ async def test_title_only_thread_is_reviewed(monkeypatch: pytest.MonkeyPatch) ->
                 violations=[],
                 suggested_revision=None,
                 title_prefix_advisory=None,
+                advisory=None,
             )
             return SimpleNamespace(output_parsed=parsed)
 

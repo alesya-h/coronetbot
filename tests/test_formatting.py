@@ -1,4 +1,5 @@
 from coronetbot.formatting import (
+    advisory_notice,
     chunks,
     edited_message_public_notice,
     quote,
@@ -20,6 +21,13 @@ def test_chunks_preserve_text_except_split_newlines() -> None:
     parts = list(chunks(text, limit=10))
     assert "".join(parts) == text
     assert all(len(part) <= 10 for part in parts)
+
+
+def test_optional_advisory_confirms_message_was_retained() -> None:
+    notice = advisory_notice("general", "Add a pinpoint source if convenient.")
+    assert "left in place" in notice[0]
+    assert "Optional suggestion" in notice[0]
+    assert "No action is required" in notice[0]
 
 
 def test_removal_notice_contains_required_sections() -> None:
@@ -90,5 +98,12 @@ def test_thread_deletion_notice_preserves_participant_messages() -> None:
 
 
 def test_validation_notice_does_not_expose_internal_audit_channel() -> None:
-    allowed = ModerationResult(allowed=True)
-    assert "bot-moderation-audit" not in "\n".join(validation_notice("draft", allowed))
+    allowed = ModerationResult(
+        allowed=True,
+        advisory="A source would help but is not required.",
+    )
+    notice = "\n".join(validation_notice("draft", allowed))
+    assert "bot-moderation-audit" not in notice
+    assert "passes" in notice
+    assert "Optional suggestion" in notice
+    assert "No action is required" in notice

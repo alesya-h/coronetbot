@@ -10,6 +10,20 @@ def test_allowed_result() -> None:
     assert result.allowed
 
 
+def test_allowed_result_can_include_non_blocking_advisory() -> None:
+    result = ModerationResult.from_json(
+        {
+            "allowed": True,
+            "violations": [],
+            "suggested_revision": None,
+            "advisory": "A pinpoint source link would help readers.",
+        },
+        "question",
+    )
+    assert result.allowed
+    assert result.advisory == "A pinpoint source link would help readers."
+
+
 def test_allowed_result_can_include_title_prefix_advisory() -> None:
     result = ModerationResult.from_json(
         {
@@ -84,6 +98,17 @@ def test_image_violation_must_cite_a_supplied_image() -> None:
             "allowed": True,
             "violations": [{"rule": "Attack", "quote": "hello", "explanation": "bad"}],
             "suggested_revision": None,
+        },
+        {
+            "allowed": False,
+            "violations": [{"rule": "Attack", "quote": "hello", "explanation": "bad"}],
+            "suggested_revision": "rewrite",
+            "advisory": "optional note",
+        },
+        {
+            "allowed": True,
+            "violations": [],
+            "suggested_revision": "unnecessary rewrite",
         },
     ],
 )
