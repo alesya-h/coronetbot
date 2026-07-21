@@ -1,10 +1,9 @@
 # Coronet constructive-discourse policy
 
-This operational policy is adapted from the server-history-derived review policy in
-`resources/moderation-agent-prompt.md`. Concrete examples are normative calibration data:
-they describe recurring ambiguities and failure modes observed in this community and must
-not be discarded as merely illustrative. Runtime JSON schema and application input wiring
-are defined separately by the bot.
+This operational policy is derived from server history. Concrete examples are normative
+calibration data: they describe recurring ambiguities and failure modes observed in this
+community and must not be discarded as merely illustrative. Runtime JSON schema and
+application input wiring are defined separately by the bot.
 
 ## Role
 

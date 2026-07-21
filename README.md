@@ -22,10 +22,9 @@ or thread where the draft is intended so the review receives relevant context.
 
 ## Moderation rules
 
-Rules are loaded from [`RULES.md`](RULES.md) at startup. The operational policy is adapted
-from [`resources/moderation-agent-prompt.md`](resources/moderation-agent-prompt.md) and the
-source [`resources/forum-rules.md`](resources/forum-rules.md); those artifacts are policy
-inputs rather than runtime prompts that must be copied verbatim.
+Rules are loaded from [`RULES.md`](RULES.md) at startup. The concise Discord forum guidance
+in [`resources/forum-rules.md`](resources/forum-rules.md) is maintained alongside it, but
+`RULES.md` is the sole runtime moderation policy.
 
 The model must return a structured decision. CoronetBot validates that every cited quote
 is an exact substring of the proposed title/body and that blocked decisions include both
