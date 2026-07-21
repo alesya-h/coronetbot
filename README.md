@@ -205,3 +205,7 @@ limit makes that unavoidable). The sequence is:
 4. “Original draft — copy the next message”
 5. The plain original draft
 6. Instructions for revising, `/validate`, and `/rules`
+
+While we don't take appeals regarding the moderation of individual messages, feedback on
+the rules used for moderation is welcome in
+`#discord-server-feedback`.

@@ -1338,7 +1338,10 @@ class CoronetClient(discord.Client):
                 f"LLM: `codex/{self.config.llm_model}` "
                 f"(`{self.config.llm_thinking}` reasoning)\n"
                 f"Rules file: `{self.config.rules_path}`\n"
-                "If moderation or audit logging fails, the bot leaves the message in place."
+                "If moderation or audit logging fails, the bot leaves the message in place.\n"
+                "While we don't take appeals regarding the moderation of individual "
+                "messages, feedback on the rules used for moderation is "
+                "welcome in **#discord-server-feedback**."
             )
             await self._audit(
                 "**Command and bot response**\n"

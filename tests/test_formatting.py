@@ -39,6 +39,9 @@ def test_removal_notice_contains_required_sections() -> None:
     assert "Return to the server" in combined
     assert "`/validate` here" not in combined
     assert "bot-moderation-audit" not in combined
+    assert "we don't take appeals" in combined
+    assert "feedback on the rules used for moderation" in combined
+    assert "#discord-server-feedback" in combined
     assert notice[2] == "I disagree with the decision."
     assert notice[4] == "You idiot"
     assert not notice[2].startswith(">")

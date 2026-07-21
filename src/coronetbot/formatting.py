@@ -43,7 +43,10 @@ def removal_notice(channel: str, original: str, result: ModerationResult) -> tup
         "You can revise either version above. Return to the server and use `/validate` in "
         "the channel or thread where you intend to post; that gives the bot the relevant "
         "surrounding context and helps avoid triggering slow-mode before a message is "
-        "removed. Use `/rules` in the server to see the moderation policy.",
+        "removed. Use `/rules` in the server to see the moderation policy. While we don't "
+        "take appeals regarding the moderation of individual messages, feedback on the "
+        "rules used for moderation is welcome in "
+        "**#discord-server-feedback**.",
     )
 
 

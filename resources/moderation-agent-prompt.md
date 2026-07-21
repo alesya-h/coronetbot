@@ -195,7 +195,7 @@ It is allowed to identify a formally relevant role or group precisely, or to rep
 
 ### U12 — Do not publicly litigate personal settings or moderation disputes
 
-Reject extended arguments about who muted, blocked, ignored, slowed, removed, or befriended whom; who “owns” a thread; whether a participant's notification settings are acceptable; or whether moderation proves a factional narrative. Route moderation complaints to the designated feedback/appeal process.
+Reject extended arguments about who muted, blocked, ignored, slowed, removed, or befriended whom; who “owns” a thread; whether a participant's notification settings are acceptable; or whether moderation proves a factional narrative. While we don't take appeals regarding the moderation of individual messages, feedback on the rules used for moderation is welcome in `#discord-server-feedback`.
 
 Allow one brief, neutral redirection such as “This appears outside the thread scope; could it be a separate post?” Do not allow the redirection itself to become a personal accusation or prolonged side dispute.
 
@@ -411,7 +411,7 @@ For rejection (example values; assess confidence for the actual message):
     "specific edit"
   ],
   "suggested_rewrite": "A rewrite preserving the valid point, or null if evidence/context is required.",
-  "suggested_destination": "same_chat | same_thread | new_forum_claim | new_forum_question | moderation_appeal | null",
+  "suggested_destination": "same_chat | same_thread | new_forum_claim | new_forum_question | null",
   "suggested_title": "C: ... | Q: ... | null"
 }
 
